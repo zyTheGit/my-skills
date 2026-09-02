@@ -11,7 +11,12 @@ from typing import Optional
 
 
 def get_commits(
-    repo_path: str, since: str, until: str, author: Optional[str] = None
+    repo_path: str,
+    since: str,
+    until: str,
+    author: Optional[str] = None,
+    branches: Optional[list[str]] = None,
+    repo_name: Optional[str] = None,
 ) -> list[dict]:
     """
     获取指定日期范围的 Git 提交记录
@@ -21,6 +26,8 @@ def get_commits(
         since: 开始日期 (YYYY-MM-DD)
         until: 结束日期 (YYYY-MM-DD)
         author: 作者名称（可选）
+        branches: 分支列表（可选，指定后只查这些分支；默认查询所有分支）
+        repo_name: 仓库名称（可选，用于日志和输出的 repo 字段）
 
     Returns:
         提交记录列表
@@ -32,6 +39,8 @@ def get_commits(
     if not (repo / ".git").exists():
         raise ValueError(f"不是有效的 Git 仓库: {repo_path}")
 
+    name = repo_name or repo.name
+
     cmd = [
         "git",
         "-C",
@@ -42,6 +51,28 @@ def get_commits(
         "--pretty=format:%H|%s|%ad|%an",
         "--date=short",
     ]
+
+    if branches:
+        # 指定分支：先校验存在性，不存在的分支跳过并警告
+        valid_branches = []
+        for branch in branches:
+            check = subprocess.run(
+                ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", branch],
+                capture_output=True, text=True, encoding="utf-8",
+            )
+            if check.returncode == 0:
+                valid_branches.append(branch)
+            else:
+                print(f"警告: 仓库 {name} 中分支不存在，已跳过: {branch}")
+
+        if not valid_branches:
+            print(f"警告: 仓库 {name} 的指定分支均不存在，本次不获取该仓库提交")
+            return []
+
+        cmd.extend(valid_branches)
+    else:
+        # 默认：查询所有分支（含远程和未合并分支）
+        cmd.append("--all")
 
     if author:
         cmd.extend(["--author", author])
@@ -67,7 +98,7 @@ def get_commits(
                     "subject": subject,
                     "date": date,
                     "author": author_name,
-                    "repo": repo.name,
+                    "repo": name,
                 }
             )
 
@@ -80,11 +111,19 @@ def main():
     parser.add_argument("--until", required=True, help="结束日期 (YYYY-MM-DD)")
     parser.add_argument("--repo", required=True, help="Git 仓库路径")
     parser.add_argument("--author", help="作者名称（可选）")
+    parser.add_argument(
+        "--branch",
+        action="append",
+        dest="branches",
+        help="指定分支（可多次传入，只查这些分支；不传则查询所有分支）",
+    )
     parser.add_argument("--output", help="输出文件路径（可选，默认输出到标准输出）")
 
     args = parser.parse_args()
 
-    commits = get_commits(args.repo, args.since, args.until, args.author)
+    commits = get_commits(
+        args.repo, args.since, args.until, args.author, args.branches
+    )
 
     output = json.dumps(commits, ensure_ascii=False, indent=2)
 

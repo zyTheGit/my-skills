@@ -66,10 +66,8 @@ def normalize_newlines(content: str) -> str:
     """
     统一换行符处理，兼容不同 agent 传入方式
 
-    不同 agent 传入 \n 的方式不同：
-    - Claude Code 通过 --summary 参数传，\\n 是字面量
-    - OpenCode 可能通过 stdin 传，\\n 是真正的换行符
-    - Codex/Pi 可能又是另一种方式
+    不同 agent 传入 \n 的方式不同：有的通过参数传，字面量 \n 不会被转义；
+    有的通过 stdin 传，\n 是真正的换行符。
 
     策略：把字面量 \\n 统一替换为真正的换行符，再清理多余空行
     """

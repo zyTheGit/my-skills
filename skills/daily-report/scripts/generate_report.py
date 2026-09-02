@@ -8,6 +8,7 @@ from pathlib import Path
 from datetime import datetime
 
 from common import format_report, summarize_commits
+from get_commits import get_commits
 from write_report import write_report
 
 # 确保 Windows 上的 UTF-8 输出
@@ -32,10 +33,17 @@ def load_config(config_dir: Path) -> dict:
     return json.loads(config_path.read_text(encoding="utf-8"))
 
 
-def get_all_commits(config: dict, since: str, until: str) -> list[dict]:
-    """获取所有仓库的提交记录"""
-    import subprocess
+def get_all_commits(
+    config: dict, since: str, until: str, branches: list[str] | None = None
+) -> list[dict]:
+    """获取所有仓库的提交记录
 
+    Args:
+        config: 配置字典
+        since: 开始日期 (YYYY-MM-DD)
+        until: 结束日期 (YYYY-MM-DD)
+        branches: 命令行指定的分支（可选，优先于每个仓库配置的 branches）
+    """
     all_commits = []
 
     for repo_config in config["repos"]:
@@ -43,39 +51,18 @@ def get_all_commits(config: dict, since: str, until: str) -> list[dict]:
         repo_name = repo_config["name"]
         author = config.get("author")
 
-        cmd = [
-            "git", "-C", repo_path, "log",
-            f"--since={since} 00:00:00",
-            f"--until={until} 23:59:59",
-            "--pretty=format:%H|%s|%ad|%an",
-            "--date=short",
-        ]
-
-        if author:
-            cmd.extend(["--author", author])
+        # 分支优先级：命令行 --branch > 仓库配置 branches > 默认所有分支
+        repo_branches = branches or repo_config.get("branches")
 
         try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True,
-                check=True, encoding="utf-8"
+            all_commits.extend(
+                get_commits(
+                    repo_path, since, until,
+                    author=author, branches=repo_branches, repo_name=repo_name,
+                )
             )
-
-            for line in result.stdout.strip().split("\n"):
-                if not line:
-                    continue
-
-                parts = line.split("|", 3)
-                if len(parts) == 4:
-                    hash_val, subject, date, author_name = parts
-                    all_commits.append({
-                        "hash": hash_val,
-                        "subject": subject,
-                        "date": date,
-                        "author": author_name,
-                        "repo": repo_name,
-                    })
-        except subprocess.CalledProcessError:
-            print(f"警告: 无法获取仓库 {repo_name} ({repo_path}) 的提交记录")
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            print(f"警告: 无法获取仓库 {repo_name} ({repo_path}) 的提交记录: {e}")
 
     return all_commits
 
@@ -114,7 +101,13 @@ def main():
     parser.add_argument("--since", help="开始日期 (YYYY-MM-DD)")
     parser.add_argument("--until", help="结束日期 (YYYY-MM-DD)")
     parser.add_argument("--force", action="store_true", help="强制覆盖已存在的日报")
-    parser.add_argument("--raw", action="store_true", help="输出原始提交数据 (JSON)，由 Claude 进行 AI 汇总")
+    parser.add_argument(
+        "--branch",
+        action="append",
+        dest="branches",
+        help="指定分支（可多次传入，作用于所有仓库；不传则使用仓库配置或默认所有分支）",
+    )
+    parser.add_argument("--raw", action="store_true", help="输出原始提交数据 (JSON)，交给 AI 进行汇总")
     parser.add_argument("--summary", help="AI 汇总后的日报内容（跳过规则式格式化）")
 
     args = parser.parse_args()
@@ -148,7 +141,7 @@ def main():
             sys.exit(1)
 
     # 获取提交记录
-    commits = get_all_commits(config, since, until)
+    commits = get_all_commits(config, since, until, args.branches)
     print(f"获取到 {len(commits)} 条提交记录")
 
     if commits:
@@ -165,7 +158,7 @@ def main():
 
     default_content = config.get("default_content", "日常工作")
 
-    # --raw 模式：输出结构化 JSON 供 Claude 自行汇总
+    # --raw 模式：输出结构化 JSON 供 AI 自行汇总
     if args.raw:
         import json
         raw_data = {
