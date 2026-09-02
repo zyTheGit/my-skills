@@ -93,6 +93,10 @@ uv run python scripts/format_report.py --date 2026-04-10 --commits commits.json 
 
 写入日报到文件，处理编码和换行兼容。
 
+**安全写入**：先编码验证 UTF-8，再写临时文件，最后原子替换。编码失败时不会破坏原文件。
+
+**自动年度归档**：append 模式写入前，自动把主文件中的历史年份内容拆到 `工作内容_YYYY.txt`，主文件只保留当前年份。归档失败仅告警，不影响本次写入。
+
 ```bash
 uv run python scripts/write_report.py --output /path/to/output.txt --content "日报内容"
 ```
@@ -109,6 +113,33 @@ uv run python scripts/write_report.py --output /path/to/output.txt --content "�
 | `--check-date` | 否 | 仅检查日期是否已存在，不写入 |
 
 **换行符兼容**：自动统一不同 agent 传入的换行符格式（字面量 `\n` → 真正的换行符），多余空行自动压缩。
+
+---
+
+## archive_report.py
+
+按年份归档日报，主文件只保留当年，历史年份拆到 `工作内容_YYYY.txt`。
+
+```bash
+uv run python scripts/archive_report.py --output /path/to/工作内容.txt [--year 2026] [--dry-run]
+```
+
+**参数**：
+
+| 参数 | 必需 | 说明 |
+|------|------|------|
+| `--output` | 是 | 主文件路径 |
+| `--year` | 否 | 当前年份（默认取今年） |
+| `--dry-run` | 否 | 仅预览拆分结果，不实际写入 |
+
+**归档规则**：
+- 支持两种日期格式：`2026年04月02日`（中文）和 `2026/04/02`（斜杠）
+- 主文件只保留 `--year` 指定年份的日报块
+- 历史年份按年拆到 `工作内容_YYYY.txt`（如 `工作内容_2025.txt`）
+- 归档文件已存在时合并去重（按日期键），不会重复追加
+- 无日期行的散落内容归入当前年份
+
+**自动触发**：`write_report.py` 在 append 模式写入前会自动调用归档，无需手动运行。
 
 ---
 

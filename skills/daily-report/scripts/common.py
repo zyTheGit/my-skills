@@ -2,8 +2,64 @@
 # -*- coding: utf-8 -*-
 """日报生成技能 - 共享工具函数"""
 
+import os
 import re
 from datetime import datetime
+from pathlib import Path
+
+
+def match_date_line(line: str) -> tuple[int, int, int] | None:
+    """匹配日报日期行，返回 (年, 月, 日)；不匹配返回 None
+
+    支持两种格式：
+    - 中文：2026年04月02日
+    - 斜杠：2026/04/02
+    日期后可带任意中文/括号注释（如 （加班）、（周会）、请假、
+    （陕西铜川350MW...项目）等），但行内不得出现正文编号特征
+    （如数字编号 1.、项目序号一、等）。
+
+    识别策略：先按日期结构匹配，再验证月日合法（1-12月、1-31日），
+    避免正文行以年份开头时的误判。
+    """
+    m = re.match(r"^(\d{4})年(\d{1,2})月(\d{1,2})日", line)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return y, mo, d
+    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})", line)
+    if m:
+        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        if 1 <= mo <= 12 and 1 <= d <= 31:
+            return y, mo, d
+    return None
+
+
+def read_text_utf8_or_gbk(path: Path) -> str:
+    """读取文本文件，UTF-8 失败时回退 GBK"""
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return path.read_text(encoding="gbk")
+
+
+def safe_write(path: Path, content: str) -> None:
+    """安全写入：先编码验证，再写临时文件，最后原子替换。
+
+    失败时抛 RuntimeError，绝不破坏原文件。
+    """
+    try:
+        data = content.encode("utf-8")
+    except UnicodeEncodeError as e:
+        raise RuntimeError(f"内容包含无法编码为 UTF-8 的字符: {e}") from e
+
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_bytes(data)
+    try:
+        os.replace(tmp_path, path)
+    except Exception as e:
+        if tmp_path.exists():
+            tmp_path.unlink()
+        raise RuntimeError(f"替换文件失败: {e}") from e
 
 
 def _longest_common_substring(a: str, b: str) -> str:

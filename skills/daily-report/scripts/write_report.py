@@ -1,60 +1,64 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""直接写入日报到工作内容文件（解决编码问题）"""
+"""直接写入日报到工作内容文件（解决编码问题，按年份自动归档）"""
 
 import argparse
-import sys
 import re
+import sys
+from datetime import datetime
 from pathlib import Path
+
+from archive_report import archive_file
+from common import match_date_line, read_text_utf8_or_gbk, safe_write
 
 
 def check_date_exists(date_str: str, output_path: str) -> bool:
     """
     检查文件中是否已存在指定日期的日报
-    
+
     Args:
         date_str: 日期字符串（如 2026年04月20日）
         output_path: 输出文件路径
-    
+
     Returns:
         bool: 是否已存在
     """
     output_file = Path(output_path)
     if not output_file.exists():
         return False
-    
+
     try:
-        content = output_file.read_text(encoding="utf-8")
+        content = read_text_utf8_or_gbk(output_file)
         return date_str in content
-    except:
+    except Exception:
         return False
 
 
 def remove_existing_date_report(date_str: str, output_path: str) -> str:
     """
     移除文件中已存在的指定日期的日报
-    
+
     Args:
         date_str: 日期字符串（如 2026年04月20日）
         output_path: 输出文件路径
-    
+
     Returns:
         str: 移除后的内容
     """
     output_file = Path(output_path)
     try:
-        content = output_file.read_text(encoding="utf-8")
-        
+        content = read_text_utf8_or_gbk(output_file)
+
         # 使用正则表达式匹配该日期下的所有内容
         # 匹配格式：日期行 + 后续的编号行（直到下一个日期或文件结尾）
         pattern = rf'{re.escape(date_str)}.*?(?=\n\d{{4}}年\d{{2}}月\d{{2}}日|$)'
         new_content = re.sub(pattern, '', content, flags=re.DOTALL)
-        
+
         # 清理多余的空行
         new_content = re.sub(r'\n{3,}', '\n\n', new_content)
-        
+
         return new_content.strip()
-    except:
+    except Exception:
         return ""
 
 
@@ -67,15 +71,10 @@ def normalize_newlines(content: str) -> str:
     - OpenCode 可能通过 stdin 传，\\n 是真正的换行符
     - Codex/Pi 可能又是另一种方式
 
-    策略：先统一为真正的换行符，再清理多余空行
+    策略：把字面量 \\n 统一替换为真正的换行符，再清理多余空行
     """
     # 如果内容中包含字面量 \\n（两个字符），替换为真正的换行符
-    # 但要避免把已经是真正换行符的内容搞乱
-    # 检测策略：如果字符串中包含 \\n 但不包含真正的换行符，说明是字面量传入
-    if r"\n" in content and "\n" not in content:
-        content = content.replace(r"\n", "\n")
-    # 如果同时包含真正的换行符和字面量 \\n，只替换字面量
-    elif r"\n" in content:
+    if r"\n" in content:
         content = content.replace(r"\n", "\n")
 
     # 清理多余空行（3个以上连续换行压缩为2个）
@@ -84,10 +83,36 @@ def normalize_newlines(content: str) -> str:
     return content
 
 
+def _detect_content_date(content: str) -> tuple[int, int, int] | None:
+    """从日报内容中提取日期 (年, 月, 日)；无日期行返回 None"""
+    for line in content.split("\n"):
+        m = match_date_line(line)
+        if m is not None:
+            return m
+    return None
+
+
+def _target_file_for_date(output_file: Path, date: tuple[int, int, int]) -> Path:
+    """根据内容日期决定目标文件：当年→主文件，往年→对应年份归档文件"""
+    if date[0] == datetime.now().year:
+        return output_file
+    return output_file.with_name(f"{output_file.stem}_{date[0]}{output_file.suffix}")
+
+
+def _has_date(target: Path, date: tuple[int, int, int]) -> bool:
+    """目标文件是否已包含该日期（两种格式都检查）"""
+    if not target.exists():
+        return False
+    y, m, d = date
+    candidates = [f"{y}年{m:02d}月{d:02d}日", f"{y}/{m:02d}/{d:02d}"]
+    content = read_text_utf8_or_gbk(target)
+    return any(c in content for c in candidates)
+
+
 def write_report(content: str, output_path: str, mode: str = "append", overwrite_date: str = None) -> None:
     """
     写入日报到输出文件
-    
+
     Args:
         content: 日报内容
         output_path: 输出文件路径
@@ -102,36 +127,58 @@ def write_report(content: str, output_path: str, mode: str = "append", overwrite
     # 确保目录存在
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
+    # 按年份归档：写入前先把主文件里的历史年份拆到 工作内容_YYYY.txt，
+    # 确保主文件只保留当前年份。归档失败不阻塞写入（仅警告）。
     if mode == "append" and output_file.exists():
-        # 读取现有内容
         try:
-            existing_content = output_file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            # 如果文件编码有问题，尝试其他编码
-            try:
-                existing_content = output_file.read_text(encoding="gbk")
-            except:
-                existing_content = ""
-        
-        # 添加空行分隔
-        new_content = existing_content.rstrip() + "\n\n" + content
+            archive_file(str(output_file))
+        except Exception as e:
+            print(f"警告: 年度归档失败（不影响本次写入）: {e}")
+
+    if mode == "append":
+        # 确定目标文件：内容属往年则写入对应年份归档文件，否则写入主文件
+        content_date = _detect_content_date(content)
+        target = _target_file_for_date(output_file, content_date) if content_date else output_file
+
+        # 去重检查：目标文件已有该日期则跳过，防止重复写入
+        if content_date and _has_date(target, content_date):
+            y, m, d = content_date
+            print(f"提示: {y}年{m:02d}月{d:02d}日的日报已存在于 {target.name}，跳过写入")
+            print(f"如需覆盖请使用 --mode overwrite --overwrite-date \"{y}年{m:02d}月{d:02d}日\"")
+            return
+
+        # 追加内容（文件不存在则直接写入）
+        if target.exists():
+            existing_content = read_text_utf8_or_gbk(target)
+            new_content = existing_content.rstrip() + "\n\n" + content
+        else:
+            new_content = content
     elif mode == "overwrite":
         if not overwrite_date:
             # 禁止不带日期参数的全文覆写，保护历史内容
             print("错误: --mode overwrite 需要同时指定 --overwrite-date，防止误删历史日报")
             sys.exit(1)
         # 覆盖指定日期的日报
+        target = output_file
         existing_content = remove_existing_date_report(overwrite_date, output_path)
         if existing_content:
             new_content = existing_content + "\n\n" + content
         else:
             new_content = content
-        new_content = content
+    else:
+        print(f"错误: 未知写入模式 {mode}")
+        sys.exit(1)
 
-    # 写入文件（UTF-8编码，不带BOM）
-    output_file.write_text(new_content, encoding="utf-8")
+    # 安全写入：先编码验证，再写临时文件，最后原子替换。
+    # 避免 write_text 先截断文件、编码失败时历史内容被清空的严重事故。
+    try:
+        safe_write(target, new_content)
+    except RuntimeError as e:
+        print(f"错误: {e}")
+        print("原始文件未做任何修改，请检查传入内容后重试。")
+        sys.exit(1)
 
-    print(f"日报已写入: {output_file}")
+    print(f"日报已写入: {target}")
 
 
 def main():
@@ -144,7 +191,7 @@ def main():
     parser.add_argument("--check-date", required=False, help="检查指定日期是否已存在（只检查不写入）")
 
     args = parser.parse_args()
-    
+
     # 只检查日期是否存在
     if args.check_date:
         exists = check_date_exists(args.check_date, args.output)
