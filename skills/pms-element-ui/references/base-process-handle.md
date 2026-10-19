@@ -71,6 +71,10 @@
 | manual-control-urge-button | 手动控制催办按钮显隐（须 true 才显示） | boolean | true |
 | process-status-images | 自定义流程状态图标 | object | null |
 | process-urge-handler | 自定义催办处理函数 | function | null |
+| process-logs-handler | 自定义审批日志获取函数 (requestData, vm)，可直接返回节点数组或接口响应 | function | null |
+| process-sub-process-handler | 自定义子流程日志获取函数 (requestData, card, vm)，可直接返回节点数组或接口响应 | function | null |
+| process-log-url | 自定义审批日志接口地址，优先级低于 `process-logs-handler`、高于 `service-code` 拼接 | string | '' |
+| process-sub-process-url | 自定义子流程日志接口地址，优先级低于 `process-sub-process-handler`；缺省时在审批日志地址后拼 `/subProcess` | string | '' |
 | auto-load-logs | 是否自动调用审批日志接口 | boolean | true |
 
 ### 右侧表单相关
@@ -123,6 +127,9 @@
 | 插槽名 | 说明 |
 |-------|------|
 | header-title / header-extra | 自定义页头内容 / 页头扩展 |
+| left | 左栏整体内容（同时覆盖标题和内容；默认使用 title-left / content-left） |
+| center | 中栏整体内容（同时覆盖标题和内容；默认使用 title-center / content-center） |
+| right | 右栏整体内容（同时覆盖标题和内容；默认使用 title-right / content-right） |
 | title-left / content-left | 左栏标题（默认：审查日志）/ 内容（默认 el-base-pro-process） |
 | title-center / content-center | 中栏标题（默认：内容预览）/ 内容 |
 | title-right / content-right | 右栏标题（默认：信息填写）/ 内容（默认 el-base-pro-form） |

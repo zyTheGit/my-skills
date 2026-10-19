@@ -10,7 +10,7 @@
 uv run python scripts/init_config.py
 ```
 
-配置文件位置：`~/.daily-report/config.json`
+配置文件位置：`~/.config/daily-report/config.json`
 
 ### 2. 修改配置
 
@@ -19,20 +19,22 @@ uv run python scripts/init_config.py
 ```json
 {
   "repos": [
-    "/path/to/your/project-a",
-    "/path/to/your/project-b"
+    { "path": "/path/to/your/project-a", "name": "项目A" },
+    { "path": "/path/to/your/project-b", "name": "项目B" }
   ],
-  "output_file": "/path/to/your/output.txt",
+  "output_file": "~/Desktop/工作内容.txt",
   "author": "your-name",
-  "holiday_api": "https://dateable.cn/holiday/info/"
+  "holiday_api": "https://timor.tech/api/holiday/info/",
+  "default_content": "日常工作"
 }
 ```
 
 **配置项说明**：
-- `repos`: Git 仓库路径列表（支持多个仓库）
-- `output_file`: 日报输出文件路径
+- `repos`: 仓库列表，每项为 `{"path": 仓库路径, "name": 显示名称}`（可选 `branches` 指定分支）；直接写字符串会报 KeyError
+- `output_file`: 日报输出文件路径，目录不存在时会自动创建
 - `author`: Git 作者名称（可选，用于过滤提交）
 - `holiday_api`: 节假日 API 地址
+- `default_content`: 当天无提交记录时的默认日报内容
 
 ### 3. 生成日报
 
@@ -94,8 +96,8 @@ skill 会自动调用节假日 API，如果 API 不可用会回退到周末判�
 
 1. 确保 Git 仓库路径正确
 2. 确保有权限访问仓库
-3. 输出文件目录必须存在
-4. 节假日 API 需要网络连接
+3. 输出文件目录不存在时会自动创建
+4. 节假日 API 需要网络连接，不可用时自动回退到周末判断
 
 ## 高级用法
 

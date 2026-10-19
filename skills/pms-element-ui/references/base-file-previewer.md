@@ -17,6 +17,7 @@
 |------|------|------|--------|
 | value / v-model | 是否显示预览 | boolean | - |
 | src | 文件地址 | string | - |
+| default-fit-to-window | 图片类型是否默认以适应窗口模式显示 | Boolean | false |
 
 ## Events
 
@@ -38,3 +39,4 @@
 
 - 需要后端提供文件流接口
 - 部分格式可能需要浏览器原生支持
+- 图片预览可设置 `default-fit-to-window` 默认完整适应窗口

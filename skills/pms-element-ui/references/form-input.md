@@ -9,6 +9,7 @@
 - 支持文本、密码、文本域等多种类型
 - 自动清除空格功能
 - 字数统计显示
+- 文字超长悬浮显示完整内容
 - 前后置图标/内容插槽
 
 ---
@@ -28,6 +29,7 @@
 | type | 类型 | string | text |
 | maxlength | 最大长度 | number | — |
 | show-word-limit | 显示字数统计 | boolean | false |
+| show-overflow-tooltip | 文字超出输入框宽度时悬浮显示完整内容（`type != "textarea"` 时有效） | boolean | true |
 | placeholder | 占位文本 | string | — |
 | clearable | 可清空 | boolean | false |
 | show-password | 显示密码切换 | boolean | false |
@@ -85,3 +87,4 @@
 - 密码框使用 `type="password"` + `show-password`
 - 文本域可用 `autosize` 自适应高度
 - `trim` 在输入时实时生效
+- `show-overflow-tooltip` 默认开启，文本超长时鼠标悬浮显示全部内容

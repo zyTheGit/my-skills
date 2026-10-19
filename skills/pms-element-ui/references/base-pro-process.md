@@ -58,7 +58,10 @@
 | show-urge-button | 是否显示催办按钮 | boolean | false |
 | status-images | 状态图标配置（pending/rejected/approved/branch） | object | 内置默认 |
 | urge-handler | 自定义催办函数 (requestData, node, vm) | function | null |
-| sub-process-handler | 自定义子流程日志获取 (requestData, card, vm) | function | null |
+| logs-handler | 自定义审批日志获取函数 (requestData, vm)，可直接返回节点数组或接口响应；缺省时请求 `log-url` 或 `/{serviceCode}/processLogs` | function | null |
+| sub-process-handler | 自定义子流程日志获取函数 (requestData, card, vm)，可直接返回节点数组或接口响应；缺省时请求 `sub-process-url` 或 `{审批日志地址}/subProcess` | function | null |
+| log-url | 自定义审批日志接口地址，优先级低于 `logs-handler`、高于 `service-code` 拼接 | string | '' |
+| sub-process-url | 自定义子流程日志接口地址，优先级低于 `sub-process-handler`；缺省时在审批日志地址后拼 `/subProcess` | string | '' |
 | drawer | 是否以抽屉方式展示审批日志 | boolean | false |
 | visible | 抽屉显示状态，.sync / v-model | boolean | false |
 | drawer-title | 抽屉标题，未传回退到 title / 审批日志 | string | '' |

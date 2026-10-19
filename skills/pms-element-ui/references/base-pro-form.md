@@ -45,6 +45,67 @@ columns: [
 { title: '公司名称', dataIndex: 'companyName', form: { type: 'Input', show: (model) => model.userType === 'company' } }
 ```
 
+### 联动规则速查
+
+| 场景 | 推荐写法 |
+|------|----------|
+| 只做显隐控制 | 使用 `form.show`，不要引入 `linkage` |
+| 单字段变化后清空下游字段并刷新选项 | 使用对象写法：`set + clearOptions + fetch + optionsKey` |
+| 初始化加载选项，仅一条时自动选中并触发下游 | 使用 `trigger: 'init'` + `afterFetch` 中的 `ctx.setFieldValue` |
+| 编辑/查看回显时也要自动执行一次联动 | 使用 `immediate: true` 或 `trigger: ['change', 'init']` |
+| 依赖多个字段共同决定结果 | 使用 `watch` + `when` |
+| 需要串行执行多个动作或复杂异步流程 | 使用 `run(ctx)` |
+
+### 初始化时自动选中唯一选项并触发下游联动
+
+第一个下拉的选项通过 `trigger: 'init'` 在表单初始化时加载；当接口只返回一条数据时，在 `afterFetch` 里用 `ctx.setFieldValue` 自动选中。联动上下文中的 `setFieldValue` 默认会继续触发后续联动，因此第二个下拉的选项加载会自动执行。
+
+```javascript
+{
+  dataIndex: 'deviceType',
+  title: '设备类型',
+  form: {
+    type: 'Select',
+    optionsKey: 'autoSelectTypeOptions',
+    linkage: {
+      trigger: 'init',
+      optionsKey: 'autoSelectTypeOptions',
+      fetch: () => this.fetchDeviceTypes(),
+      afterFetch: (options, ctx) => {
+        // 只有一条数据时默认选中；!ctx.ownerValue 避免覆盖编辑回显的已有值
+        if (options.length === 1 && !ctx.ownerValue) {
+          ctx.setFieldValue(ctx.ownerField, options[0].value);
+        }
+      }
+    }
+  }
+},
+{
+  dataIndex: 'deviceModel',
+  title: '设备型号',
+  form: {
+    type: 'Select',
+    optionsKey: 'autoSelectModelOptions',
+    linkage: {
+      watch: 'deviceType',
+      set: () => ({ deviceModel: undefined }),
+      optionsKey: 'autoSelectModelOptions',
+      fetch: (value) => {
+        // 清空设备类型时不发请求，只清空型号选项
+        if (!value) return [];
+        return this.fetchDeviceModels(value);
+      }
+    }
+  }
+}
+```
+
+清空第一个下拉时不会再触发请求，可按需调整：
+
+- `if (!value) return []`：清空时第二个下拉的值和选项都被清掉，但不发请求；
+- 加 `when: (ctx) => !!ctx.value`：清空时整条规则跳过，第二个下拉保持原样；
+- 把 `set` 和 `fetch` 拆成两条规则：实现只清值、保留选项。
+
 ## 内联模式
 
 ```vue

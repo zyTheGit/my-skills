@@ -59,7 +59,7 @@
 | auto-confirm | 是否自动确认导入 | boolean | true |
 | directory | 是否选择目录 | boolean | false |
 | drag-directory | 拖拽时是否递归展开文件夹 | boolean | false |
-| use-file-module-config | 是否根据 scode/mcode 请求文件模块限制 | boolean | true |
+| use-file-module-config | 是否根据 scode/mcode 请求文件模块限制 | boolean | false |
 | before-remove | 删除前钩子，返回 false 或 reject 可阻止删除 | function(file, fileList) | - |
 | show-upload-message | 是否显示内置上传提示 | boolean | true |
 | replace-item-actions | item-actions 是否替代默认操作按钮 | boolean | false |

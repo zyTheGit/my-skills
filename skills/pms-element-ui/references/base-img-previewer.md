@@ -17,6 +17,7 @@
 |------|------|------|--------|
 | value / v-model | 是否显示预览 | boolean | - |
 | src | 图片地址 | string | - |
+| default-fit-to-window | 是否默认以适应窗口模式显示图片 | Boolean | false |
 
 ## Events
 
@@ -28,3 +29,4 @@
 
 - 支持鼠标滚轮缩放
 - 支持键盘左右键切换图片
+- 设置 `default-fit-to-window` 后首次显示默认完整适应窗口
