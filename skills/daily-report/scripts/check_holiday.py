@@ -5,25 +5,61 @@
 import argparse
 import json
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 import urllib.request
 import urllib.error
 
+from common import ensure_utf8_stdio
+
 # 默认 API 地址
 DEFAULT_API = "https://timor.tech/api/holiday/info/"
+CACHE_FILENAME = "holiday_cache.json"
 
 
-def check_holiday(date: str, api_url: Optional[str] = None) -> dict:
+def _read_cache(cache_dir: Optional[Path]) -> dict:
+    if not cache_dir:
+        return {}
+    cache_file = cache_dir / CACHE_FILENAME
+    try:
+        return json.loads(cache_file.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _write_cache(cache_dir: Optional[Path], cache: dict) -> None:
+    if not cache_dir:
+        return
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        (cache_dir / CACHE_FILENAME).write_text(
+            json.dumps(cache, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError:
+        pass
+
+
+def check_holiday(
+    date: str, api_url: Optional[str] = None, cache_dir: Optional[Path] = None
+) -> dict:
     """
-    检查指定日期是否为节假日
+    检查指定日期是否为节假日（命中缓存时不发网络请求）
 
     Args:
         date: 日期 (YYYY-MM-DD)
         api_url: 节假日 API 地址（可选，默认使用 timor.tech）
+        cache_dir: 缓存目录（可选，通常传配置目录；节假日安排按年公布，结果可长期缓存）
 
     Returns:
         节假日信息字典，含 is_workday (bool)、type (str)、name (str)
     """
+    cache = _read_cache(cache_dir)
+    cached = cache.get(date)
+    if isinstance(cached, dict) and "is_workday" in cached:
+        result = dict(cached)
+        result["cached"] = True
+        return result
+
     if api_url is None:
         api_url = DEFAULT_API
 
@@ -39,12 +75,19 @@ def check_holiday(date: str, api_url: Optional[str] = None) -> dict:
             headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
         )
 
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=5) as response:
             data = json.loads(response.read().decode("utf-8"))
 
-        return _parse_response(data, date)
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError) as e:
+        result = _parse_response(data, date)
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError, TimeoutError, OSError) as e:
         return _fallback(date, str(e))
+
+    if result.get("fallback"):
+        return result
+
+    cache[date] = {k: result[k] for k in ("type", "name", "is_workday")}
+    _write_cache(cache_dir, cache)
+    return result
 
 
 def _parse_response(data: dict, date: str) -> dict:
@@ -111,20 +154,21 @@ def _fallback(date: str, error: str) -> dict:
 
 
 def main():
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="检查节假日状态")
     parser.add_argument("--date", required=True, help="日期 (YYYY-MM-DD)")
     parser.add_argument("--api-url", help=f"节假日 API 地址（默认 {DEFAULT_API}）")
+    parser.add_argument("--cache-dir", help="缓存目录（可选，通常传配置目录）")
     parser.add_argument("--output", help="输出文件路径（可选，默认输出到标准输出）")
 
     args = parser.parse_args()
 
-    result = check_holiday(args.date, args.api_url)
+    cache_dir = Path(args.cache_dir) if args.cache_dir else None
+    result = check_holiday(args.date, args.api_url, cache_dir)
 
     output = json.dumps(result, ensure_ascii=False, indent=2)
 
     if args.output:
-        from pathlib import Path
-
         Path(args.output).write_text(output, encoding="utf-8")
     else:
         print(output)

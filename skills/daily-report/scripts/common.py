@@ -2,10 +2,113 @@
 # -*- coding: utf-8 -*-
 """日报生成技能 - 共享工具函数"""
 
+import json
 import os
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
+
+ENV_CONFIG_DIR = "DAILY_REPORT_CONFIG_DIR"
+
+
+def ensure_utf8_stdio() -> None:
+    """把 stdin/stdout/stderr 统一为 UTF-8（幂等）
+
+    Windows 控制台/管道默认可能是 GBK，中文正文经 argv 或 stdin 传递时
+    会乱码或抛 UnicodeEncodeError。所有脚本入口先调用本函数。
+    """
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(sys, stream_name, None)
+        if stream is None or not hasattr(stream, "reconfigure"):
+            continue
+        if getattr(stream, "encoding", "").lower().replace("-", "") != "utf8":
+            stream.reconfigure(encoding="utf-8", errors="replace")
+DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
+
+_dotenv_loaded = False
+_dotenv_keys: set[str] = set()
+
+
+def read_dotenv(path: Path | None = None) -> dict[str, str]:
+    """读取 .env 文件，返回键值对（不修改环境变量）"""
+    env_path = path or DOTENV_PATH
+    values: dict[str, str] = {}
+    if not env_path.is_file():
+        return values
+
+    try:
+        lines = env_path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError:
+        return values
+
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key.startswith("export "):
+            key = key[len("export "):].strip()
+        if key:
+            values[key] = value.strip().strip('"').strip("'")
+    return values
+
+
+def load_dotenv(path: Path | None = None) -> set[str]:
+    """加载技能目录下的 .env，仅填充尚未设置的环境变量"""
+    global _dotenv_loaded
+    if _dotenv_loaded:
+        return _dotenv_keys
+    _dotenv_loaded = True
+
+    for key, value in read_dotenv(path).items():
+        if key not in os.environ:
+            os.environ[key] = value
+            _dotenv_keys.add(key)
+
+    return _dotenv_keys
+
+
+def discover_config_dir_with_source() -> tuple[Path, str]:
+    """解析配置目录，返回 (目录, 来源)
+
+    优先级：环境变量 > 技能目录 .env > 默认 ~/.config/daily-report
+    命令行 --config-dir 由调用方自行处理，优先级最高。
+    """
+    load_dotenv()
+    raw = os.environ.get(ENV_CONFIG_DIR, "").strip()
+    if raw:
+        source = ".env" if ENV_CONFIG_DIR in _dotenv_keys else "环境变量"
+        return Path(os.path.expandvars(raw)).expanduser(), source
+    return Path.home() / ".config" / "daily-report", "默认路径"
+
+
+def discover_config_dir() -> Path:
+    return discover_config_dir_with_source()[0]
+
+
+def resolve_config_dir(cli_value: str | None) -> tuple[Path, str]:
+    """统一入口：命令行 > 环境变量 > .env > 默认"""
+    if cli_value:
+        return Path(os.path.expandvars(os.path.expanduser(cli_value))), "命令行"
+    return discover_config_dir_with_source()
+
+
+def load_config(config_dir: Path | None = None) -> dict:
+    """加载配置文件；不存在时抛出 FileNotFoundError
+
+    注意：调用方打印配置时需要自行脱敏密码字段。
+    """
+    config_dir = config_dir or discover_config_dir()
+    config_path = config_dir / "config.json"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"配置文件不存在: {config_path}\n"
+            f"请先运行: uv run python scripts/init_config.py\n"
+            f"或用 --config-dir / 环境变量 {ENV_CONFIG_DIR} 指定配置目录"
+        )
+    return json.loads(config_path.read_text(encoding="utf-8"))
 
 
 def match_date_line(line: str) -> tuple[int, int, int] | None:
@@ -15,7 +118,7 @@ def match_date_line(line: str) -> tuple[int, int, int] | None:
     - 中文：2026年04月02日
     - 斜杠：2026/04/02
     日期后可带任意中文/括号注释（如 （加班）、（周会）、请假、
-    （陕西铜川350MW...项目）等），但行内不得出现正文编号特征
+    （某某项目）等），但行内不得出现正文编号特征
     （如数字编号 1.、项目序号一、等）。
 
     识别策略：先按日期结构匹配，再验证月日合法（1-12月、1-31日），
@@ -40,6 +143,56 @@ def read_text_utf8_or_gbk(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return path.read_text(encoding="gbk")
+
+
+def parse_blocks(content: str) -> list[tuple[int | None, list[str]]]:
+    """按日期行切分日报块，返回 [(year, block_lines), ...]
+
+    每个块以日期行开头，到下一个日期行或文件末尾结束。
+    无日期行的散落内容归属为 None（调用方归入当年）。
+    """
+    blocks: list[tuple[int | None, list[str]]] = []
+    current_year: int | None = None
+    current_block: list[str] = []
+
+    for line in content.split("\n"):
+        m = match_date_line(line)
+        if m is not None:
+            if current_block:
+                blocks.append((current_year, current_block))
+            current_year = m[0]
+            current_block = [line]
+        else:
+            current_block.append(line)
+
+    if current_block:
+        blocks.append((current_year, current_block))
+
+    return blocks
+
+
+def find_report_block(
+    content: str, date: tuple[int, int, int]
+) -> tuple[list[str] | None, int]:
+    """查找指定日期的日报块，返回 (块内容, 匹配数量)
+
+    同一天存在多个块时返回最后一个（通常是后追加的）。
+    """
+    matches = [
+        block
+        for _, block in parse_blocks(content)
+        if any(match_date_line(line) == date for line in block)
+    ]
+    if not matches:
+        return None, 0
+    return matches[-1], len(matches)
+
+
+def resolve_report_file(output_file: Path, date: tuple[int, int, int]) -> Path:
+    """当天日报所在文件：当年→主文件，往年→工作内容_YYYY.txt"""
+    if date[0] == datetime.now().year:
+        return output_file
+    return output_file.with_name(f"{output_file.stem}_{date[0]}{output_file.suffix}")
 
 
 def safe_write(path: Path, content: str) -> None:
@@ -81,8 +234,8 @@ def _longest_common_substring(a: str, b: str) -> str:
 def _merge_similar_items(items: list[str]) -> list[str]:
     """
     合并同类项：检测共享公共子串的条目，合并为一条
-    如 "暂停令典表调整使用全局预览组件" 和 "开工令典表调整使用全局预览组件"
-    → "暂停令、开工令等典表调整使用全局预览组件"
+    如 "导出模块支持 Excel 格式" 和 "导出模块支持 PDF 格式"
+    → "Excel 格式、PDF 格式等导出模块支持"
     """
     if len(items) <= 1:
         return items
@@ -283,10 +436,10 @@ def summarize_commits_grouped(commits: list[dict]) -> tuple[dict[str, dict[str, 
 
     返回: (grouped, bug_numbers)
     grouped = {
-        "进度管理": {"功能开发": [...], "问题修复": [...]},
-        "策划管理": {"功能开发": [...]},
+        "项目A": {"功能开发": [...], "问题修复": [...]},
+        "项目B": {"功能开发": [...]},
     }
-    bug_numbers = ["3638", "3640"]
+    bug_numbers = ["1001", "1002"]
     """
     filtered = [c for c in commits if not c["subject"].lower().startswith("merge")]
 

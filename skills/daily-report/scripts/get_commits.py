@@ -9,6 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from common import ensure_utf8_stdio
+
+# 字段分隔符用 ASCII 单元分隔符（\x1f），提交信息中出现 | 时不会破坏解析
+FIELD_SEP = "\x1f"
+
 
 def get_commits(
     repo_path: str,
@@ -43,12 +48,13 @@ def get_commits(
 
     cmd = [
         "git",
+        "-c", "core.quotepath=false",
         "-C",
         str(repo),
         "log",
         f"--since={since} 00:00:00",
         f"--until={until} 23:59:59",
-        "--pretty=format:%H|%s|%ad|%an",
+        f"--pretty=format:%H{FIELD_SEP}%s{FIELD_SEP}%ad{FIELD_SEP}%an",
         "--date=short",
     ]
 
@@ -58,7 +64,7 @@ def get_commits(
         for branch in branches:
             check = subprocess.run(
                 ["git", "-C", str(repo), "rev-parse", "--verify", "--quiet", branch],
-                capture_output=True, text=True, encoding="utf-8",
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
             )
             if check.returncode == 0:
                 valid_branches.append(branch)
@@ -79,7 +85,8 @@ def get_commits(
 
     try:
         result = subprocess.run(
-            cmd, capture_output=True, text=True, check=True, encoding="utf-8"
+            cmd, capture_output=True, text=True, check=True,
+            encoding="utf-8", errors="replace",
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(f"Git 命令执行失败: {e.stderr}")
@@ -89,7 +96,7 @@ def get_commits(
         if not line:
             continue
 
-        parts = line.split("|", 3)
+        parts = line.split(FIELD_SEP)
         if len(parts) == 4:
             hash_val, subject, date, author_name = parts
             commits.append(
@@ -106,6 +113,7 @@ def get_commits(
 
 
 def main():
+    ensure_utf8_stdio()
     parser = argparse.ArgumentParser(description="获取 Git 提交记录")
     parser.add_argument("--since", required=True, help="开始日期 (YYYY-MM-DD)")
     parser.add_argument("--until", required=True, help="结束日期 (YYYY-MM-DD)")

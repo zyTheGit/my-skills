@@ -5,11 +5,18 @@
 import argparse
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
 
 from archive_report import archive_file
-from common import match_date_line, read_text_utf8_or_gbk, safe_write
+from common import (
+    ensure_utf8_stdio,
+    match_date_line,
+    read_text_utf8_or_gbk,
+    resolve_report_file,
+    safe_write,
+)
+
+ensure_utf8_stdio()
 
 
 def check_date_exists(date_str: str, output_path: str) -> bool:
@@ -90,13 +97,6 @@ def _detect_content_date(content: str) -> tuple[int, int, int] | None:
     return None
 
 
-def _target_file_for_date(output_file: Path, date: tuple[int, int, int]) -> Path:
-    """根据内容日期决定目标文件：当年→主文件，往年→对应年份归档文件"""
-    if date[0] == datetime.now().year:
-        return output_file
-    return output_file.with_name(f"{output_file.stem}_{date[0]}{output_file.suffix}")
-
-
 def _has_date(target: Path, date: tuple[int, int, int]) -> bool:
     """目标文件是否已包含该日期（两种格式都检查）"""
     if not target.exists():
@@ -136,7 +136,7 @@ def write_report(content: str, output_path: str, mode: str = "append", overwrite
     if mode == "append":
         # 确定目标文件：内容属往年则写入对应年份归档文件，否则写入主文件
         content_date = _detect_content_date(content)
-        target = _target_file_for_date(output_file, content_date) if content_date else output_file
+        target = resolve_report_file(output_file, content_date) if content_date else output_file
 
         # 去重检查：目标文件已有该日期则跳过，防止重复写入
         if content_date and _has_date(target, content_date):

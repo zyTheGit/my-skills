@@ -7,11 +7,9 @@ import json
 import sys
 from pathlib import Path
 
-from common import format_report
+from common import ensure_utf8_stdio, format_report
 
-# 确保 Windows 上的 UTF-8 输出
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
+ensure_utf8_stdio()
 
 
 def main():

@@ -1,43 +1,41 @@
 # -*- coding: utf-8 -*-
-"""日报查询脚本（方案B：脚本化查询，避免 cat 全文占用上下文）
+"""日报查询脚本（脚本化查询，避免 cat 全文占用上下文）
+
+输出文件路径来自配置 config.json 的 output_file；--all-files 时同时搜索
+同目录下按年份归档的文件（<主文件名>_*.txt）。
 
 用法:
-  uv run python query_report.py --date 2026-04-10           # 查询某天
-  uv run python query_report.py --keyword 青赔 --limit 5     # 按关键词搜最近5条
-  uv run python query_report.py --since 2026-07-01 --until 2026-07-15  # 范围查询
-  uv run python query_report.py --month 2026-07             # 列出某月上班日报日期（含星期）
-  uv run python query_report.py --date 2026-04-10 --all-files          # 搜索主文件+归档文件
+  uv run python scripts/query_report.py --date 2026-04-10           # 查询某天
+  uv run python scripts/query_report.py --keyword 关键词 --limit 5   # 按关键词搜最近5条
+  uv run python scripts/query_report.py --since 2026-07-01 --until 2026-07-15  # 范围查询
+  uv run python scripts/query_report.py --month 2026-07             # 列出某月日报日期（含星期）
+  uv run python scripts/query_report.py --date 2026-04-10 --all-files          # 主文件+归档文件
 """
 import argparse
+import os
 import pathlib
 import re
 import sys
 from datetime import datetime
 
-sys.stdout.reconfigure(encoding="utf-8")
+from common import (
+    ensure_utf8_stdio,
+    load_config,
+    match_date_line,
+    read_text_utf8_or_gbk,
+    resolve_config_dir,
+)
 
-HOME = pathlib.Path.home()
-MAIN = HOME / "Desktop" / "工作内容.txt"
-ARCHIVES = [
-    MAIN.with_name("工作内容_2025.txt"),
-    MAIN.with_name("工作内容_bak.txt"),
-]
+ensure_utf8_stdio()
 
 WEEKDAYS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-
-
-def is_date_line(s: str):
-    return bool(
-        re.match(r"^\d{4}/\d{2}/\d{2}$", s.strip())
-        or re.match(r"^\d{4}年\d{1,2}月\d{1,2}日", s.strip())
-    )
 
 
 def split_entries(lines):
     entries = []
     cur = []
     for line in lines:
-        if is_date_line(line):
+        if match_date_line(line) is not None:
             if cur:
                 entries.append(cur)
             cur = [line]
@@ -57,12 +55,22 @@ def norm_date(d: str) -> str:
     return f"{y}年{int(mo):02d}月{int(da):02d}日"
 
 
-def load_entries(all_files: bool):
-    files = [MAIN] + (ARCHIVES if all_files else [])
+def resolve_files(all_files: bool, config_dir: str | None) -> list[pathlib.Path]:
+    config_path, _ = resolve_config_dir(config_dir)
+    config = load_config(config_path)
+    main = pathlib.Path(
+        os.path.expandvars(os.path.expanduser(config["output_file"]))
+    )
+    files = [main]
+    if all_files:
+        files.extend(sorted(main.parent.glob(f"{main.stem}_*{main.suffix}")))
+    return [f for f in files if f.exists()]
+
+
+def load_entries(files: list[pathlib.Path]):
     result = []
     for f in files:
-        if f.exists():
-            result.extend(split_entries(f.read_text(encoding="utf-8").split("\n")))
+        result.extend(split_entries(read_text_utf8_or_gbk(f).split("\n")))
     return result
 
 
@@ -73,15 +81,26 @@ def main():
     parser.add_argument("--since", help="起始日期 YYYY-MM-DD")
     parser.add_argument("--until", help="结束日期 YYYY-MM-DD")
     parser.add_argument("--limit", type=int, default=5, help="关键词搜索最多返回条数（默认5）")
-    parser.add_argument("--month", help="列出某月上班日报日期（格式 YYYY-MM）")
+    parser.add_argument("--month", help="列出某月日报日期（格式 YYYY-MM）")
     parser.add_argument("--all-files", action="store_true", help="同时搜索归档文件")
+    parser.add_argument("--config-dir", help="配置目录路径（默认读取环境变量/.env/用户目录）")
     args = parser.parse_args()
 
     if not (args.date or args.keyword or args.since or args.until or args.month):
         parser.print_help()
         sys.exit(1)
 
-    entries = load_entries(args.all_files)
+    try:
+        files = resolve_files(args.all_files, args.config_dir)
+    except (FileNotFoundError, KeyError) as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not files:
+        print("日报输出文件不存在，请先生成日报")
+        sys.exit(1)
+
+    entries = load_entries(files)
 
     # 按日期降序排序（最近的在前），用于关键词搜索
     def entry_date(e):
@@ -90,7 +109,7 @@ def main():
 
     entries_sorted = sorted(entries, key=entry_date, reverse=True)
 
-    # ---- 按月统计上班日报 ----------------
+    # ---- 按月统计日报 ----------------
     if args.month:
         m = re.match(r"^(\d{4})-(\d{1,2})$", args.month.strip())
         if not m:
@@ -118,7 +137,7 @@ def main():
                 continue
             seen.add(key)
             uniq.append(d)
-        print(f"=== {y}年{int(mo):02d}月 上班日报：{len(uniq)} 天 ===")
+        print(f"=== {y}年{int(mo):02d}月 日报：{len(uniq)} 天 ===")
         for d in uniq:
             dm = re.match(r"^(\d{4})[/年](\d{1,2})[/月](\d{1,2})", d)
             dt = datetime(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))

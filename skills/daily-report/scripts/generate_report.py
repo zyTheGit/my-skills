@@ -4,39 +4,26 @@
 
 import argparse
 import sys
-from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from pathlib import Path
 
-from common import format_report, summarize_commits
+from common import (
+    ensure_utf8_stdio,
+    format_report,
+    load_config,
+    resolve_config_dir,
+)
 from get_commits import get_commits
 from write_report import write_report
 
-# 确保 Windows 上的 UTF-8 输出
-if sys.platform == "win32":
-    sys.stdout.reconfigure(encoding="utf-8")
-
-
-def discover_config_dir() -> Path:
-    """获取配置目录（固定路径：~/.config/daily-report/）"""
-    return Path.home() / ".config" / "daily-report"
-
-
-def load_config(config_dir: Path) -> dict:
-    """加载配置文件"""
-    import json
-    config_path = config_dir / "config.json"
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"配置文件不存在: {config_path}\n"
-            f"请先运行: uv run python scripts/init_config.py"
-        )
-    return json.loads(config_path.read_text(encoding="utf-8"))
+ensure_utf8_stdio()
 
 
 def get_all_commits(
     config: dict, since: str, until: str, branches: list[str] | None = None
 ) -> list[dict]:
-    """获取所有仓库的提交记录
+    """并行获取所有仓库的提交记录
 
     Args:
         config: 配置字典
@@ -44,41 +31,44 @@ def get_all_commits(
         until: 结束日期 (YYYY-MM-DD)
         branches: 命令行指定的分支（可选，优先于每个仓库配置的 branches）
     """
-    all_commits = []
+    author = config.get("author")
+    repo_configs = config["repos"]
 
-    for repo_config in config["repos"]:
+    def fetch(repo_config: dict) -> list[dict]:
         repo_path = repo_config["path"]
         repo_name = repo_config["name"]
-        author = config.get("author")
-
-        # 分支优先级：命令行 --branch > 仓库配置 branches > 默认所有分支
         repo_branches = branches or repo_config.get("branches")
-
         try:
-            all_commits.extend(
-                get_commits(
-                    repo_path, since, until,
-                    author=author, branches=repo_branches, repo_name=repo_name,
-                )
+            return get_commits(
+                repo_path, since, until,
+                author=author, branches=repo_branches, repo_name=repo_name,
             )
         except (FileNotFoundError, ValueError, RuntimeError) as e:
             print(f"警告: 无法获取仓库 {repo_name} ({repo_path}) 的提交记录: {e}")
+            return []
 
+    if len(repo_configs) <= 1:
+        results = [fetch(rc) for rc in repo_configs]
+    else:
+        with ThreadPoolExecutor(max_workers=min(8, len(repo_configs))) as pool:
+            results = list(pool.map(fetch, repo_configs))
+
+    all_commits = []
+    for result in results:
+        all_commits.extend(result)
     return all_commits
 
 
-def check_holiday(date: str, api_url: str = "") -> bool:
-    """检查是否为节假日（API + 周末回退）"""
-    # 优先尝试 API
+def check_holiday(date: str, api_url: str = "", cache_dir: Path | None = None) -> bool:
+    """检查是否为节假日（缓存 + API + 周末回退）"""
     if api_url:
         try:
             from check_holiday import check_holiday as check_holiday_api
-            result = check_holiday_api(date, api_url)
+            result = check_holiday_api(date, api_url, cache_dir)
             return not result["is_workday"]
         except Exception as e:
             print(f"节假日 API 不可用 ({e})，回退到周末判断")
 
-    # 回退：周末判断
     dt = datetime.strptime(date, "%Y-%m-%d")
     return dt.weekday() >= 5  # 周六=5, 周日=6
 
@@ -91,11 +81,22 @@ def check_date_exists(date: str, output_path: str) -> bool:
     return _check(date_str, output_path)
 
 
+def _read_summary_file(path: str) -> str:
+    summary_path = Path(path)
+    if not summary_path.is_file():
+        print(f"错误: --summary-file 文件不存在: {path}", file=sys.stderr)
+        sys.exit(1)
+    try:
+        return summary_path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError:
+        return summary_path.read_text(encoding="gbk")
+
+
 def main():
     parser = argparse.ArgumentParser(description="自动化生成日报")
     parser.add_argument(
         "--config-dir",
-        help="配置目录路径（可选，默认自动发现）"
+        help="配置目录路径（优先级最高；默认读取环境变量/.env/用户目录）"
     )
     parser.add_argument("--date", help="指定日期 (YYYY-MM-DD)，默认今天")
     parser.add_argument("--since", help="开始日期 (YYYY-MM-DD)")
@@ -109,18 +110,36 @@ def main():
     )
     parser.add_argument("--raw", action="store_true", help="输出原始提交数据 (JSON)，交给 AI 进行汇总")
     parser.add_argument("--summary", help="AI 汇总后的日报内容（跳过规则式格式化）")
+    parser.add_argument(
+        "--summary-file",
+        help="AI 汇总内容所在的 UTF-8 文件路径（推荐：避免中文经命令行参数传递出现编码问题）",
+    )
 
     args = parser.parse_args()
 
-    # 配置目录发现
-    if args.config_dir:
-        config_dir = Path(args.config_dir)
-    else:
-        config_dir = discover_config_dir()
+    # 配置目录发现：命令行 > 环境变量 > .env > 默认路径
+    config_dir, config_source = resolve_config_dir(args.config_dir)
 
-    print(f"使用配置目录: {config_dir}")
+    print(f"使用配置目录: {config_dir}（来源: {config_source}）")
+    sys.stdout.flush()
 
-    config = load_config(config_dir)
+    try:
+        config = load_config(config_dir)
+    except FileNotFoundError as exc:
+        print(f"错误: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    # 快速写入路径：--summary/--summary-file 只负责把已汇总好的内容写入文件，
+    # 不再获取提交、不调用节假日 API（推荐配合上一步 --raw 使用）
+    if args.summary_file or (args.summary and not args.raw):
+        content = (
+            _read_summary_file(args.summary_file) if args.summary_file else args.summary
+        )
+        write_report(content, config["output_file"], mode="append")
+        return
+
+    if not config.get("repos"):
+        print("警告: 配置中没有仓库（repos），本次日报不会包含提交记录")
 
     # 日期处理
     if args.date:
@@ -150,8 +169,8 @@ def main():
         if len(commits) > 5:
             print(f"  ... 还有 {len(commits) - 5} 条")
 
-    # 节假日判断
-    is_holiday = check_holiday(since, config.get("holiday_api", ""))
+    # 节假日判断（结果按日期缓存在配置目录，重复运行不再发网络请求）
+    is_holiday = check_holiday(since, config.get("holiday_api", ""), config_dir)
     is_overtime = is_holiday and bool(commits)
     if is_overtime:
         print("检测到节假日/周末加班")
@@ -161,6 +180,7 @@ def main():
     # --raw 模式：输出结构化 JSON 供 AI 自行汇总
     if args.raw:
         import json
+        web = config.get("web") or {}
         raw_data = {
             "date": since,
             "since": since,
@@ -169,16 +189,16 @@ def main():
             "is_overtime": is_overtime,
             "has_commits": len(commits) > 0,
             "default_content": default_content,
+            "output_file": config["output_file"],
+            "web_enabled": bool(web.get("enabled")),
+            "web_project_configured": bool(str(web.get("project_name") or "").strip()),
             "commits": commits,
         }
         print(json.dumps(raw_data, ensure_ascii=False, indent=2))
         return
 
     # 格式化日报（规则式，传统模式）
-    if args.summary:
-        report = args.summary
-    else:
-        report = format_report(since, commits, is_holiday, default_content)
+    report = format_report(since, commits, is_holiday, default_content)
 
     print("\n生成的日报内容:")
     print(report)

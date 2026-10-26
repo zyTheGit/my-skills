@@ -4,7 +4,7 @@
     {
       "id": 1,
       "prompt": "生成今天的日报",
-      "expected_output": "生成今天的工作日报，包含日期、提交汇总和可能的加班标记",
+      "expected_output": "生成今天的工作日报，包含日期、提交汇总和可能的加班标记；若 web.enabled=true 且 web.project_name 已配置，写入后直接自动执行 publish_report.py --fill 登录、填写并保存草稿，不询问不提醒；不自动提交审核",
       "files": []
     },
     {
@@ -17,6 +17,60 @@
       "id": 3,
       "prompt": "生成本周的日报，我的仓库在 /path/to/my-project",
       "expected_output": "生成本周的工作日报，正确处理多天的提交汇总",
+      "files": []
+    },
+    {
+      "id": 4,
+      "prompt": "生成今天的日报并打开网页日报系统，把内容复制到剪贴板",
+      "expected_output": "生成本地日报；读取当天正文（不含日期行）写入剪贴板；自动登录网页日报系统；已配置项目时直接自动填写完成工作并保存草稿，未配置项目时只打开表单并提示补配 web.project_name；不提交审核",
+      "files": []
+    },
+    {
+      "id": 5,
+      "prompt": "只把今天的日报内容复制到剪贴板，不打开浏览器",
+      "expected_output": "执行 publish_report.py --copy-only，复制当天正文并打印来源文件，不启动浏览器",
+      "files": []
+    },
+    {
+      "id": 6,
+      "prompt": "打开日报表单，但是自动登录失败了",
+      "expected_output": "提示自动登录失败，保留浏览器在登录页，给出截图和 DOM 快照路径；不自动重试登录，避免账号锁定",
+      "files": []
+    },
+    {
+      "id": 7,
+      "prompt": "第一次用日报技能，帮我配置一下，我的项目都在 /path/to/projects",
+      "expected_output": "先运行 init_config.py --status 判断未配置；先询问是否使用默认配置路径 ~/.config/daily-report，不使用则让用户输入自定义目录；再询问扫描根目录、作者和输出文件；运行 --scan 发现仓库；询问纳入哪些项目以及是否启用网页日报；用 init_config.py 写入配置并加 --save-env；提醒用户自行填写密码",
+      "files": []
+    },
+    {
+      "id": 8,
+      "prompt": "生成日报，但我把配置放在了 D:/configs/daily-report",
+      "expected_output": "按优先级解析配置目录：--config-dir > DAILY_REPORT_CONFIG_DIR 环境变量 > 技能目录 .env > 默认 ~/.config/daily-report；可用 --config-dir D:/configs/daily-report 或 --save-env 持久化",
+      "files": []
+    },
+    {
+      "id": 9,
+      "prompt": "扫描 /path/to/projects 下有哪些 Git 仓库",
+      "expected_output": "运行 init_config.py --scan /path/to/projects，输出包含 root 和 repos 的 JSON；每个仓库含 path、name、remote；跳过 node_modules、dist、虚拟环境等目录",
+      "files": []
+    },
+    {
+      "id": 10,
+      "prompt": "生成日报后，帮我在网页日报里选好项目、填上完成工作并保存草稿",
+      "expected_output": "确认 web.project_name 或 --project 已配置；执行 publish_report.py --fill --project <项目>；先校验表单日期与日报日期一致；在项目选择器中搜索并选中项目，回填正文到完成工作，点击保存；不选择审核人、不提交审核；失败时保留浏览器并按退出码 3 说明原因",
+      "files": []
+    },
+    {
+      "id": 11,
+      "prompt": "把今天的日报直接提交审核，审核人张三",
+      "expected_output": "先向用户确认要真实提交（不可静默执行）；确认后执行 publish_report.py --fill --submit --yes --reviewer 张三；完成填写、保存草稿、选择审核人并提交；未加 --yes 时脚本退出码 1 且不打开浏览器",
+      "files": []
+    },
+    {
+      "id": 12,
+      "prompt": "填日报时提示表单日期和日报日期不一致",
+      "expected_output": "默认停止填写，不保存草稿，浏览器保持打开，退出码 3；说明表单日期与 --date 的具体值；只有用户明确要求时才使用 --allow-date-mismatch，不要自行绕过",
       "files": []
     }
   ]

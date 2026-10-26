@@ -1,170 +1,34 @@
 ---
 name: daily-report
-description: 根据当天 Git 提交记录自动生成工作日报。当用户提到"生成日报"、"日报"、"工作日报"、"git日报"、"提交日报"、"每日汇报"等关键词时使用此技能。支持指定日期、多仓库汇总、节假日判断，自动追加到工作日志文件。
-allowed-tools: Read Write Bash(uv:*) Bash(git:*)
+description: 根据当天 Git 提交记录自动生成工作日报。当用户提到"生成日报"、"日报"、"工作日报"、"git日报"、"提交日报"、"每日汇报"等关键词时使用此技能。支持指定日期、多仓库汇总、节假日判断、历史日报查询，自动追加到工作日志文件；已配置网页日报系统时自动登录、填写表单并保存草稿（提交审核仍需用户明确要求）。跨平台（Windows/macOS/Linux）、跨 agent 工具通用。
+allowed-tools: Read Write Bash(uv:*) Bash(python:*) Bash(python3:*) Bash(git:*)
 ---
 
 # 工作日报生成技能
 
-根据 Git 提交记录自动生成工作日报，汇总提交内容，判断是否加班，追加到指定的日志文件。
+根据 Git 提交记录自动生成工作日报：并行采集多仓库提交，AI 汇总润色，判断加班，安全追加到日志文件。
 
-**核心原则**：
-- 直接执行，不询问用户授权
-- 使用 Python 脚本写入，确保 UTF-8 编码
-- 避免重复写入同一天的日报
-- 跨 agent CLI 通用
+## 核心原则
 
-## 功能特点
+- **快速路径**：配置已存在时直接执行"标准流程"两条命令，不要先跑 `--status` 等前置检查；只有报"配置文件不存在"或用户首次使用时才进入配置流程
+- **编码规则**：日报正文一律写入 UTF-8 临时文件后用 `--summary-file` 传入（或经 stdin 管道），**不要把多行中文正文内联在命令行参数里**——Windows 控制台默认 GBK，argv 传中文易乱码；脚本内部已统一 UTF-8 stdio
+- **解释器**：优先 `uv run python`；环境没有 uv 时用 `python3` 或 `python`（除 publish_report.py 需要 playwright 外，其余脚本均为纯标准库）
+- **不重复写入**：脚本自带同日去重，重复运行会跳过并提示；覆盖需用户明确要求（`--force` 或 overwrite 模式）
+- **网页自动填报**：配置了 `web.enabled=true` 时，日报写入后**直接执行自动填表**（`--fill`，保存草稿），不要询问或提醒用户；`web.project_name` 未配置时退化为登录+打开表单+复制正文，并提示一次补配项目。`--submit` 提交审核不自动执行，仅在用户明确要求时、经确认项目/日期/正文/审核人后加 `--submit --yes`
+- **敏感信息**：账号密码只从配置文件或环境变量读取，不打印、不写入对话和日志；不要把用户的内网地址、真实姓名等写进任何输出示例
 
-- **自动获取提交记录**：从配置的 Git 仓库获取指定日期的提交
-- **AI 智能汇总**：调用大模型对提交记录进行理解、归类、润色，生成更自然连贯的日报
-- **按项目分类展示**：自动按项目分组，同一项目的相似工作合并表述
-- **BUG 修复整合**：BUG 编号自动识别，以自然语言融入对应上下文
-- **节假日判断**：调用中国节假日 API 判断是否工作日（含周末回退）
-- **自动追加**：按标准格式追加到工作日志文件
-- **跨 agent 兼容**：换行符处理兼容不同 AI 工具的传入方式
+## 标准流程（两步）
 
-## 配置文件
-
-配置目录固定为 `~/.config/daily-report/`，配置文件为 `config.json`。
-
-首次运行时执行 `uv run python scripts/init_config.py` 会自动创建默认配置。
-
-配置文件格式：
-
-```json
-{
-  "repos": [
-    { "path": "/path/to/repo1", "name": "项目1" },
-    { "path": "/path/to/repo2", "name": "项目2" }
-  ],
-  "output_file": "~/Desktop/工作内容.txt",
-  "author": "your-name",
-  "holiday_api": "https://timor.tech/api/holiday/info/",
-  "default_content": "日常工作"
-}
-```
-
-**配置说明**：
-- `repos`: 仓库列表，`path` 为仓库路径，`name` 为显示名称
-- `output_file`: 日报输出文件路径
-- `author`: Git 作者名称（可选，用于过滤提交）
-- `holiday_api`: 节假日 API 地址
-- `default_content`: 当天无提交记录时的默认日报内容
-
-## 使用方式
-
-### 基本用法
-
-```
-生成日报
-```
-
-自动生成今天的工作日报。
-
-### 指定日期
-
-```
-生成 2026-04-09 的日报
-```
-
-### 指定日期范围
-
-```
-生成本周的日报
-生成本月的日报
-生成 2026-04-01 到 2026-04-10 的日报
-```
-
-### 强制覆盖
-
-```
-强制生成今天的日报
-```
-
-### 手动调用脚本
-
-```bash
-uv run python scripts/generate_report.py --date 2026-04-24 --force
-```
-
-## 工作流程
-
-### 步骤 1：检查配置文件
-
-加载 `~/.config/daily-report/config.json`。
-
-**检查点**：
-- 配置文件是否存在
-- 仓库路径是否有效
-- 输出文件路径是否可写
-
-#### 配置文件不存在时的引导流程
-
-如果配置文件不存在，**不要直接创建默认配置就结束**，而是通过提问式引导用户完成核心配置：
-
-1. **告知用户**：配置文件不存在，需要先配置才能生成日报。配置文件位置为 `~/.config/daily-report/config.json`，也可通过 `uv run python scripts/init_config.py` 初始化默认模板后手动编辑。
-
-2. **依次询问以下关键信息**（使用 AskUserQuestion 工具，一次最多 4 个问题）：
-   - **Git 仓库路径和项目名称**：需要纳入日报的仓库，格式为 `仓库路径 → 显示名称`，支持多个仓库
-   - **Git 作者名称**：用于过滤提交记录，可先执行 `git config --global user.name` 获取当前值供用户确认
-   - **日报输出文件路径**：默认为 `~/Desktop/工作内容.txt`，询问是否需要自定义
-   - **默认日报内容**：无提交记录时的默认内容，默认为"日常工作"
-
-3. **根据用户回答生成配置文件**：调用 `init_config.py` 创建默认配置后，用用户提供的值覆盖对应字段，写入配置文件。
-
-4. **确认配置完成**：告知用户配置文件已创建，并显示配置文件路径和关键配置项摘要，方便后续手动调整。
-
-**示例对话**：
-
-```
-助手：检测到日报配置文件不存在，需要先完成配置才能生成日报。
-     配置文件位置：C:\Users\xxx\.config\daily-report\config.json
-     也可以后续通过编辑该文件手动调整配置。
-
-     请提供以下信息：
-     [AskUserQuestion]
-       Q1: 请提供需要纳入日报的 Git 仓库路径和项目名称（支持多个）
-       Q2: 你的 Git 提交作者名称是什么？（当前全局配置为 xxx）
-       Q3: 日报输出文件路径是否使用默认位置（桌面/工作内容.txt）？
-       Q4: 无提交记录时的默认日报内容？
-     [/AskUserQuestion]
-
-用户：[回答]
-
-助手：配置已完成！
-     配置文件：C:\Users\xxx\.config\daily-report\config.json
-     - 仓库：C:/projects/pms → PMS前端, C:/projects/api → 后端API
-     - 作者：zhangsan
-     - 输出：C:\Users\xxx\Desktop\工作内容.txt
-     后续可随时编辑配置文件调整设置。
-```
-
-### 步骤 2：获取提交记录
-
-对配置中的所有仓库依次执行 `git log`，按日期范围和作者过滤。
-
-```bash
-git log --since="<date> 00:00:00" --until="<date> 23:59:59" --author="<author>"
-```
-
-### 步骤 3：判断节假日
-
-调用节假日 API，如果不可用则回退到周末判断（周六/周日）。
-
-**加班判断逻辑**：
-- `holiday` 或 `weekend` + 有提交 → 标记为加班
-- `workday` → 不标记
-
-### 步骤 4：获取结构化原始数据
-
-通过 `--raw` 模式运行脚本，获取结构化的提交数据（JSON 格式），交给 AI 汇总：
+### 第 1 步：获取结构化原始数据
 
 ```bash
 uv run python scripts/generate_report.py --raw
 ```
 
-输出示例：
+指定日期加 `--date YYYY-MM-DD`；范围用 `--since` / `--until`；指定分支用 `--branch`（可多次）。
+
+一次调用内完成：并行读取所有仓库 `git log` → 节假日判断（结果按日期缓存在配置目录，重复运行不发网络请求；API 不可用回退周末判断）→ 输出 JSON：
+
 ```json
 {
   "date": "2026-05-28",
@@ -172,153 +36,160 @@ uv run python scripts/generate_report.py --raw
   "is_overtime": false,
   "has_commits": true,
   "default_content": "日常工作",
+  "output_file": "~/Desktop/工作内容.txt",
+  "web_enabled": true,
+  "web_project_configured": true,
   "commits": [
-    { "hash": "abc123", "subject": "feat: 暂停令界面优化", "date": "2026-05-28", "author": "John", "repo": "进度管理" }
+    { "hash": "abc123", "subject": "feat: 列表查询改为分页加载", "date": "2026-05-28", "author": "dev", "repo": "项目A" }
   ]
 }
 ```
 
 **检查点**：
-- `has_commits` 为 false → 用 `default_content` 作为日报内容
-- `is_overtime` 为 true → 在日期后添加"（加班）"标记
+- `has_commits=false` → 正文用 `default_content`
+- `is_overtime=true` → 日期行后加"（加班）"
+- 退出码 1 且提示"日报已存在" → 询问用户是否覆盖，确认后第 2 步写入时用 `--force` 语义（overwrite 模式），不要静默覆盖
 
-### 步骤 5：AI 智能汇总
+### 第 2 步：AI 汇总并写入
 
-AI 根据获取到的提交记录，进行以下处理：
+1. 按下方"AI 汇总规则"把 commits 汇总成日报正文
+2. 用 Write 工具把正文写入临时文件（UTF-8），如 `<系统临时目录>/daily-report-2026-05-28.txt`
+3. 执行写入（不重复跑 git 和节假日 API，秒级完成）：
+
+```bash
+uv run python scripts/generate_report.py --summary-file <临时文件>
+```
+
+4. 写入成功后删除临时文件，向用户展示最终日报内容和输出文件路径
+
+写入脚本自动处理：目录创建、UTF-8 原子写入（失败不破坏原文件）、字面量 `\n` 转换、历史年份归档（`工作内容_YYYY.txt`）、同日去重。
+
+### 第 3 步：网页日报自动填报（按 --raw 输出判断，无需询问）
+
+| 条件 | 动作 |
+|------|------|
+| `web_enabled=true` 且 `web_project_configured=true` 且日报日期为今天 | 直接执行 `uv run --with playwright python scripts/publish_report.py --fill`（自动登录、填项目与完成工作、保存草稿），把结果随日报一起汇报 |
+| `web_enabled=true` 但 `web_project_configured=false` | 执行 `publish_report.py`（默认模式：登录+打开表单+复制正文），并在汇报里提醒一次：补配 `web.project_name` 即可全自动填报 |
+| `web_enabled=false` | 不执行网页步骤；可在汇报里提一句支持"网页日报自动填报"（启用 `web` 并配置 `project_name`），仅提醒一次，不反复打扰 |
+| 日报日期不是今天 | 不自动执行网页步骤（历史日期与表单当天日期不一致，自动填写会停止）；用户明确要求时再加 `--date` 执行 |
+
+未配置时的提醒只在对话汇报里给出一次（说明"配置后可自动填报/提交"），不要弹窗打断、不要反复追问。退出码 2（登录失败）/ 3（填写中断）时不要重试，把原因和"浏览器已保持打开可手动完成"告知用户。提交审核（`--submit --yes`）永远不自动执行。
+
+## AI 汇总规则
 
 1. **语义理解**：理解每条提交的真实含义，不机械罗列
 2. **智能归类**：按项目和功能模块自然分组，而非简单按 commit 类型（feat/fix）分类
-3. **合并同类项**：将同个功能的多次提交合并为一条连贯描述（如"暂停令界面优化"和"开工令界面优化"→ "完成暂停令、开工令等典表界面优化"）
-4. **BUG 融入上下文**：BUG 修复不单独列编号，而是自然地融入对应功能描述中（如"修复了 #3638 典表编辑数据回显异常"）
-5. **功能名称前置**：涉及具体功能的描述，句首带上功能/模块名称，再接具体改动（如"批量导入人员：启用按钮并补充提交参数"，而不是"启用批量导入人员按钮并补充提交参数"）
-6. **语言弱 AI 化**：像人手写日报一样表达，具体细节要落实：
-   - 不用"完成了……的开发/优化工作"这类空泛句式，直接写做了什么、改动是什么
-   - 少用"提升用户体验""优化了整体性能"等主观概括词，写具体行为（如"列表查询改为分页加载"）
-   - 不堆砌形容词和排比句，不写"各项功能均得到进一步完善"式的总结腔
-   - 语气平实简短，一条一事，不用"首先/其次/最后"等结构化措辞
+3. **合并同类项**：同个功能的多次提交合并为一条连贯描述（如"导出支持 Excel"+"导出支持 PDF" → "导出：支持 Excel、PDF 两种格式"）
+4. **BUG 融入上下文**：BUG 编号不单独罗列，自然融入对应功能描述（如"修复数据回显异常（#1024）"）
+5. **功能名称前置**：句首带功能/模块名，再接具体改动（如"批量导入：启用按钮并补充提交参数"）
+6. **语言弱 AI 化**：像人手写日报，具体细节落实：
+   - 不用"完成了……的开发/优化工作"这类空泛句式，直接写做了什么
+   - 少用"提升用户体验"等主观概括词，写具体行为（如"列表查询改为分页加载"）
+   - 不堆砌形容词，语气平实简短，一条一事
 
-**输出格式**：
+**输出格式**（日期行顶格；多项目用中文序号分节，项目间空一行；单项目直接编号列条目）：
+
 ```
 2026年05月28日
-一、进度管理
-1. 暂停令、开工令典表：界面优化，统一使用全局预览组件
-2. 典表编辑：修复数据回显异常（#3638, #3640），调整表单加载逻辑
+一、项目A
+1. 列表页：查询改为分页加载，减少首屏等待
+2. 数据编辑：修复回显异常（#1024），调整表单加载逻辑
 
-二、策划管理
-1. 方案导出：新增批量导出功能，支持 Excel 格式
-2. 方案列表：查询改为分页加载，减少首屏等待
+二、项目B
+1. 报表导出：新增批量导出，支持 Excel 格式
 ```
 
-### 步骤 6：检查是否已写入
+加班日示例：`2026年05月30日 （加班）`；无提交示例：日期行 + `1. 日常工作`。
 
-用 Python 检查输出文件是否已包含当天日期。如果存在：
-- 提示用户"当天日报已存在"
-- 可通过 `--force` 参数强制覆盖
+## 查询历史日报
 
-### 步骤 7：写入文件
-
-通过 `write_report.py` 脚本写入，确保 UTF-8 编码正确：
-- 文件不存在则自动创建
-- 目录不存在则自动创建
-- 自动处理编码问题
-- 自动统一换行符（兼容不同 agent 传入方式）
+不要 cat 整个日志文件（占用上下文），用查询脚本：
 
 ```bash
-uv run python scripts/write_report.py --output /path/to/output --content "2026年05月28日\n一、..."
+uv run python scripts/query_report.py --date 2026-05-28      # 某天
+uv run python scripts/query_report.py --keyword 关键词        # 搜索
+uv run python scripts/query_report.py --month 2026-05        # 某月清单
+uv run python scripts/query_report.py --date 2026-01-05 --all-files  # 含往年归档
 ```
 
-## 输出示例
+输出文件路径自动读取配置，无需传参。
 
-### 示例 1：工作日（有提交）
+## 首次配置（仅当配置缺失时）
 
-```
-2026年04月10日
-一、认证模块
-1. 用户登录：支持手机号/邮箱两种登录方式
-2. 用户注册：实现表单验证和短信验证码流程
+运行 `uv run python scripts/init_config.py --status` 查看状态；`needs_setup=true` 或配置不存在时按以下流程交互（用宿主工具的交互提问能力，如 AskUserQuestion；一次最多 4 问）：
 
-二、通用组件
-1. 全局预览组件：优化样式，修复不同分辨率下的布局错乱问题（#1024）
-2. 登录页面：修复按钮在移动端点击区域过小的问题（#2048）
+**第一轮**：是否使用默认配置目录（`~/.config/daily-report`）；项目扫描根目录；Git 作者名（先跑 `git config --global user.name` 作默认值）；输出文件路径（默认 `~/Desktop/工作内容.txt`）。
 
-三、技术改进
-1. API 请求拦截器：重构错误处理，统一 Token 刷新逻辑
+**扫描仓库**：
+
+```bash
+uv run python scripts/init_config.py --scan "<扫描根目录>"
 ```
 
-### 示例 2：工作日（无提交）
+自动跳过 `node_modules`、`dist`、虚拟环境等，默认深度 3（`--scan-depth` 可调）。扫描不到时请用户直接给仓库路径。
 
-```
-2026年04月10日
-1. 日常工作
-```
+**第二轮**：选择纳入日报的仓库及显示名；是否启用网页日报（启用则问表单地址和登录账号——密码不要问，让用户自行编辑配置文件或设置环境变量）。
 
-### 示例 3：多项目周末加班
+**写入配置**（首次始终加 `--save-env`，把配置目录记入技能目录 `.env`，后续不再询问）：
 
-```
-2026年04月12日 （加班）
-一、数据平台
-1. 数据迁移：编写迁移脚本，支持增量同步和断点续传
-2. 数据看板：修复生产环境统计异常，处理查询超时
-
-二、运营后台
-1. 活动配置：新增配置页面，支持多模板选择和预览
+```bash
+uv run python scripts/init_config.py \
+  --repo "<仓库路径>=<显示名>" \
+  --author "<作者>" \
+  --output "<输出文件>" \
+  [--enable-web --web-url "<表单地址>" --web-username "<账号>"] \
+  --save-env
 ```
 
-## 智能处理
+配置为增量合并；`--repo` 整体替换仓库列表。完成后展示配置摘要，继续标准流程。
 
-### 提交信息清洗
+**配置目录解析优先级**：`--config-dir` > 环境变量 `DAILY_REPORT_CONFIG_DIR` > 技能目录 `.env` > 默认 `~/.config/daily-report`。脚本启动时打印实际目录和来源。
 
-- 移除提交前缀（feat:、fix: 等，含中英文冒号）
-- 移除 BUG 编号引用（会单独汇总）
-- 去除技术细节（ticket 编号等）
-- 过滤无意义提交（Merge、同步等）
+**config.json 关键字段**：`repos`（path/name，可选 branches）、`output_file`、`author`、`holiday_api`（默认中国节假日 API，可换可留空）、`default_content`、`web`（可选，网页日报联动）。完整说明见 [references/scripts.md](references/scripts.md)。
 
-### 多仓库汇总
+## 网页日报联动（需 web.enabled=true）
 
-配置多个仓库时，合并所有仓库的提交记录，统一汇总输出。
+配置齐全时标准流程第 3 步会自动执行 `--fill`。以下为手动/变体用法：
 
-### 节假日 API 容错
+```bash
+# 填写项目与正文并保存草稿（标准流程自动执行的就是这条，--project 缺省读 web.project_name）
+uv run --with playwright python scripts/publish_report.py --fill
 
-API 不可用时自动回退到周末判断，不影响日报生成。
+# 只复制正文 + 登录 + 打开表单，不填表（web.project_name 未配置时的退化行为）
+uv run --with playwright python scripts/publish_report.py --date 2026-05-28
 
-### 换行符兼容
+# 只复制不打开浏览器
+uv run --with playwright python scripts/publish_report.py --copy-only
 
-不同 AI 工具传入内容时换行符处理方式不同，`write_report.py` 会自动统一处理：
-- 字面量 `\n` → 真正的换行符
-- 多余空行自动压缩
+# 提交审核（仅用户明确要求，先确认项目/日期/正文/审核人，再带 --yes）
+uv run --with playwright python scripts/publish_report.py --submit --yes --project "<项目>" --reviewer "<审核人>"
+```
 
-## 脚本说明
+- 剪贴板跨平台：Windows/macOS 原生支持；Linux 需已安装 `wl-copy`（Wayland）或 `xclip`/`xsel`（X11）
+- 浏览器使用系统已安装的 Edge/Chrome（专用 Profile 保持登录态），不额外下载 Chromium；找不到时在 `web.browser.executable` 指定路径
+- 退出码：0 成功；1 配置/剪贴板/浏览器失败；2 已复制已打开但自动登录失败（人工登录，**不要自动重试**，避免账号锁定；出现验证码同样停止）；3 填写/提交中途停止（日期不一致、项目/审核人未找到等，浏览器保持打开可手动完成）
+- 表单日期与日报日期不一致时默认停止，不要主动加 `--allow-date-mismatch` 绕过
+- 失败排查（截图/DOM 快照位置、选择器配置）见 [references/scripts.md](references/scripts.md)
+
+## 故障排除（速查）
+
+| 现象 | 处理 |
+|------|------|
+| 提示配置文件不存在 | 进入"首次配置"流程 |
+| 配置目录和预期不一致 | 看脚本首行输出的来源；优先级见上文 |
+| 获取不到提交 | 核对仓库路径（`git -C <path> status`）、日期格式、`author` 是否与实际提交者一致 |
+| 写入乱码 | 确认正文经 `--summary-file`/stdin 传入而非 argv；输出文件由脚本统一 UTF-8 写入，读取旧 GBK 文件会自动回退 |
+| 节假日判断不准 | API 结果按日期缓存在配置目录 `holiday_cache.json`，当年调休安排变更时可删除该缓存 |
+| 网页登录/填写失败 | 看配置目录 `logs/` 下截图；详细排查见 references/scripts.md |
+
+## 脚本一览
 
 | 脚本 | 用途 |
 |------|------|
-| `generate_report.py` | 统一入口，整合全流程（推荐） |
-| `get_commits.py` | 获取 Git 提交记录 |
-| `check_holiday.py` | 检查节假日状态（API + 周末回退） |
-| `format_report.py` | 格式化日报内容（独立 CLI） |
-| `write_report.py` | 写入日报文件，处理编码和换行兼容 |
-| `init_config.py` | 初始化配置文件 |
+| `generate_report.py` | 统一入口：`--raw` 取数 / `--summary-file` 写入 / 不带参数走规则式格式化 |
+| `query_report.py` | 查询历史日报（按日期/关键词/月份/范围） |
+| `publish_report.py` | 网页日报：复制、登录、打开表单、填写、提交 |
+| `init_config.py` | 配置状态、仓库扫描、创建/增量更新配置 |
+| `get_commits.py` / `check_holiday.py` / `format_report.py` / `write_report.py` / `archive_report.py` | 单步工具，一般由统一入口调用 |
 
-详细参数和使用方式见 [references/scripts.md](references/scripts.md)。
-
-## 故障排除
-
-### 无法获取提交记录
-
-- 检查配置文件中的仓库路径
-- 在仓库目录执行 `git status` 验证仓库有效性
-- 确保日期格式为 `YYYY-MM-DD`
-
-### 节假日 API 调用失败
-
-- 自动回退到周末判断
-- 检查网络连接和 API 地址
-
-### 文件追加失败
-
-- 检查配置中的输出路径
-- 确保目录存在且有写入权限
-
-### 换行符显示异常
-
-- `write_report.py` 会自动统一换行符
-- 如果仍有问题，检查 agent 传入的内容是否包含特殊字符
+详细参数见 [references/scripts.md](references/scripts.md)。
