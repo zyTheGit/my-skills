@@ -24,6 +24,8 @@ def ensure_utf8_stdio() -> None:
             continue
         if getattr(stream, "encoding", "").lower().replace("-", "") != "utf8":
             stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 DOTENV_PATH = Path(__file__).resolve().parent.parent / ".env"
 
 _dotenv_loaded = False
@@ -114,26 +116,25 @@ def load_config(config_dir: Path | None = None) -> dict:
 def match_date_line(line: str) -> tuple[int, int, int] | None:
     """匹配日报日期行，返回 (年, 月, 日)；不匹配返回 None
 
-    支持两种格式：
+    支持三种格式：
     - 中文：2026年04月02日
     - 斜杠：2026/04/02
-    日期后可带任意中文/括号注释（如 （加班）、（周会）、请假、
-    （某某项目）等），但行内不得出现正文编号特征
-    （如数字编号 1.、项目序号一、等）。
+    - ISO：2026-04-02
+    日期后可带任意注释（如 （加班）、（周会））。
 
-    识别策略：先按日期结构匹配，再验证月日合法（1-12月、1-31日），
-    避免正文行以年份开头时的误判。
+    识别策略：先按日期结构匹配（行首锚定），再验证月日合法
+    （1-12月、1-31日），避免正文行以年份开头时的误判。
     """
-    m = re.match(r"^(\d{4})年(\d{1,2})月(\d{1,2})日", line)
-    if m:
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if 1 <= mo <= 12 and 1 <= d <= 31:
-            return y, mo, d
-    m = re.match(r"^(\d{4})/(\d{1,2})/(\d{1,2})", line)
-    if m:
-        y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if 1 <= mo <= 12 and 1 <= d <= 31:
-            return y, mo, d
+    for pattern in (
+        r"^(\d{4})年(\d{1,2})月(\d{1,2})日",
+        r"^(\d{4})/(\d{1,2})/(\d{1,2})",
+        r"^(\d{4})-(\d{1,2})-(\d{1,2})",
+    ):
+        m = re.match(pattern, line)
+        if m:
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            if 1 <= mo <= 12 and 1 <= d <= 31:
+                return y, mo, d
     return None
 
 
@@ -196,14 +197,24 @@ def resolve_report_file(output_file: Path, date: tuple[int, int, int]) -> Path:
 
 
 def safe_write(path: Path, content: str) -> None:
-    """安全写入：先编码验证，再写临时文件，最后原子替换。
+    """安全写入：先编码验证；已存在的文件原地覆写，新文件走临时+原子替换。
 
-    失败时抛 RuntimeError，绝不破坏原文件。
+    原地覆写保留同一文件对象——Windows 桌面上"临时文件+替换"会被
+    Explorer 视为删除重建，导致图标位置重排。
+    失败时抛 RuntimeError。
     """
     try:
         data = content.encode("utf-8")
     except UnicodeEncodeError as e:
         raise RuntimeError(f"内容包含无法编码为 UTF-8 的字符: {e}") from e
+
+    if path.exists():
+        try:
+            with open(path, "wb") as f:
+                f.write(data)
+        except OSError as e:
+            raise RuntimeError(f"写入文件失败: {e}") from e
+        return
 
     tmp_path = path.with_name(path.name + ".tmp")
     tmp_path.write_bytes(data)
@@ -384,50 +395,6 @@ def extract_bug_numbers(subject: str) -> list[str]:
                 numbers.append(num)
 
     return numbers
-
-
-def summarize_commits(commits: list[dict]) -> list[str]:
-    """
-    汇总提交记录（简易版） - 每条提交独立成行，BUG编号单独汇总
-    保留用于兼容，推荐使用 summarize_commits_grouped
-    """
-    filtered = [c for c in commits if not c["subject"].lower().startswith("merge")]
-
-    all_bug_numbers = []
-    items = []
-
-    for commit in filtered:
-        subject = commit["subject"]
-        bug_nums = extract_bug_numbers(subject)
-        all_bug_numbers.extend(bug_nums)
-
-        cleaned = clean_subject(subject)
-        if cleaned:
-            if re.match(r'^[\d、，,\s\-]+$', cleaned):
-                for num in re.findall(r'\d+', cleaned):
-                    if num not in all_bug_numbers and len(num) >= 2:
-                        all_bug_numbers.append(num)
-            else:
-                items.append(cleaned)
-
-    seen = set()
-    unique_items = []
-    for item in items:
-        if item not in seen:
-            seen.add(item)
-            unique_items.append(item)
-
-    bug_seen = set()
-    unique_bugs = []
-    for num in all_bug_numbers:
-        if num not in bug_seen:
-            bug_seen.add(num)
-            unique_bugs.append(num)
-
-    if unique_bugs:
-        unique_items.append(f"BUG修复：{', '.join(unique_bugs)}")
-
-    return unique_items
 
 
 def summarize_commits_grouped(commits: list[dict]) -> tuple[dict[str, dict[str, list[str]]], list[str]]:

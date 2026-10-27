@@ -1,0 +1,5 @@
+# 本地环境与工具产物
+.env
+__pycache__/
+*.pyc
+.qoder-credits/

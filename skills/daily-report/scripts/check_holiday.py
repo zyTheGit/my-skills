@@ -57,6 +57,7 @@ def check_holiday(
     cached = cache.get(date)
     if isinstance(cached, dict) and "is_workday" in cached:
         result = dict(cached)
+        result.setdefault("date", date)
         result["cached"] = True
         return result
 

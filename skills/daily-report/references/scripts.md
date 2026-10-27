@@ -36,7 +36,7 @@ uv run python scripts/generate_report.py [--date YYYY-MM-DD] [--force]
 | `--config-dir` | 否 | 配置目录（默认见"配置目录解析"） |
 | `--date` | 否 | 指定日期，默认今天 |
 | `--since` / `--until` | 否 | 日期范围（与 --date 二选一） |
-| `--force` | 否 | 强制覆盖已存在的日报 |
+| `--force` | 否 | 强制覆盖已存在的日报（替换同日旧块，往年自动定位归档文件） |
 | `--branch` | 否 | 指定分支，可多次传入；不传则用仓库配置或所有分支 |
 | `--raw` | 否 | 输出原始提交数据 (JSON)，由 AI 进行汇总 |
 | `--summary` | 否 | AI 汇总后的日报内容（短内容适用；长中文正文建议用 --summary-file） |
@@ -52,7 +52,7 @@ uv run python scripts/generate_report.py [--date YYYY-MM-DD] [--force]
 
 ## query_report.py
 
-查询历史日报，避免 cat 整个日志文件占用上下文。输出文件路径自动读取配置的 `output_file`。
+查询历史日报，避免 cat 整个日志文件占用上下文。输出文件路径自动读取配置的 `output_file`。文件里三种日期行格式（`2026年04月10日` / `2026/04/10` / `2026-04-10`）都能识别；命令行日期参数用 `YYYY-MM-DD`。
 
 ```bash
 uv run python scripts/query_report.py --date 2026-04-10
@@ -162,7 +162,8 @@ cat /path/to/content.txt | uv run python scripts/write_report.py --output /path/
 | `--content` | 否 | 日报内容（短内容适用；与 --file/stdin 三选一） |
 | `--file` | 否 | 日报内容文件路径（UTF-8） |
 | `--mode` | 否 | 写入模式：append（默认）/ overwrite |
-| `--overwrite-date` | 否 | 覆盖指定日期的日报（overwrite 模式必填，防止误删历史） |
+| `--overwrite-date` | 否 | 覆盖指定日期的日报（overwrite 模式必填，防止误删历史；支持 `2026年04月20日` / `2026/04/20` / `2026-04-20`，往年自动定位归档文件） |
+| `--force` | 否 | append 时同日日报已存在则替换旧块后写入（不加则跳过并提示） |
 | `--check-date` | 否 | 仅检查日期是否已存在，不写入 |
 
 不传 `--content`/`--file` 时从 stdin 读取。换行符自动统一（字面量 `\n` → 真正换行符），多余空行压缩。

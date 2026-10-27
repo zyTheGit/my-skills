@@ -46,13 +46,13 @@ def split_entries(lines):
     return entries
 
 
-def norm_date(d: str) -> str:
-    """2026-04-10 / 2026/04/10 -> 2026年04月10日"""
-    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", d.strip())
+def parse_arg_date(value: str) -> tuple[int, int, int]:
+    """解析命令行日期参数 YYYY-MM-DD / YYYY/MM/DD，非法时退出"""
+    m = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$", value.strip())
     if not m:
-        return d
-    y, mo, da = m.groups()
-    return f"{y}年{int(mo):02d}月{int(da):02d}日"
+        print(f"日期格式错误: {value}，请使用 YYYY-MM-DD")
+        sys.exit(1)
+    return tuple(int(x) for x in m.groups())
 
 
 def resolve_files(all_files: bool, config_dir: str | None) -> list[pathlib.Path]:
@@ -102,56 +102,43 @@ def main():
 
     entries = load_entries(files)
 
+    # 条目日期元组 (年, 月, 日)；文件里三种日期行格式（中文/斜杠/ISO）都能识别
+    def entry_key(e):
+        d = match_date_line(e[0].strip()) if e else None
+        return d or (0, 0, 0)
+
     # 按日期降序排序（最近的在前），用于关键词搜索
-    def entry_date(e):
-        m = re.match(r"^(\d{4})[/年](\d{1,2})[/月](\d{1,2})", e[0].strip())
-        return m.groups() if m else ("0", "0", "0")
+    entries_sorted = sorted(entries, key=entry_key, reverse=True)
 
-    entries_sorted = sorted(entries, key=entry_date, reverse=True)
-
-    # ---- 按月统计日报 ----------------
+    # ---- 按月统计日报 ----
     if args.month:
         m = re.match(r"^(\d{4})-(\d{1,2})$", args.month.strip())
         if not m:
             print(f"月份格式错误: {args.month}，请使用 YYYY-MM")
             sys.exit(1)
-        y, mo = m.groups()
-        days = []
+        y, mo = int(m.group(1)), int(m.group(2))
+        by_day: dict[int, str] = {}
         for e in entries:
-            dm = re.match(r"^(\d{4})[/年](\d{1,2})[/月](\d{1,2})日?", e[0].strip())
-            if dm and dm.group(1) == y and int(dm.group(2)) == int(mo):
-                days.append(e[0].strip())
-        if not days:
-            print(f"{y}年{int(mo):02d}月 没有日报记录")
+            d = entry_key(e)
+            if d[0] == y and d[1] == mo and d[2] and d[2] not in by_day:
+                by_day[d[2]] = e[0].strip()
+        if not by_day:
+            print(f"{y}年{mo:02d}月 没有日报记录")
             sys.exit(0)
-        # 按日排序去重（保留原样去重，含加班标记）
-        def day_of(s):
-            m = re.match(r"^(\d{4})[/年](\d{1,2})[/月](\d{1,2})", s)
-            return int(m.group(3)) if m else 0
-
-        seen = set()
-        uniq = []
-        for d in sorted(days, key=day_of):
-            key = re.sub(r"\s*（加班）", "", d)
-            if key in seen:
-                continue
-            seen.add(key)
-            uniq.append(d)
-        print(f"=== {y}年{int(mo):02d}月 日报：{len(uniq)} 天 ===")
-        for d in uniq:
-            dm = re.match(r"^(\d{4})[/年](\d{1,2})[/月](\d{1,2})", d)
-            dt = datetime(int(dm.group(1)), int(dm.group(2)), int(dm.group(3)))
+        print(f"=== {y}年{mo:02d}月 日报：{len(by_day)} 天 ===")
+        for day in sorted(by_day):
+            dt = datetime(y, mo, day)
             wd = WEEKDAYS[dt.weekday()]
-            tag = "  （加班）" if "加班" in d else ""
-            print(f"  {dt.month:02d}-{dt.day:02d} {wd}{tag}")
+            tag = "  （加班）" if "加班" in by_day[day] else ""
+            print(f"  {mo:02d}-{day:02d} {wd}{tag}")
         return
 
     # ---- 按日期查询 ----
     if args.date:
-        target = norm_date(args.date)
+        target = parse_arg_date(args.date)
         found = False
         for e in entries_sorted:
-            if e[0].strip().startswith(target):
+            if entry_key(e) == target:
                 print("\n".join(e))
                 found = True
                 break
@@ -162,12 +149,14 @@ def main():
 
     # ---- 范围查询 ----
     if args.since or args.until:
-        since = norm_date(args.since) if args.since else "0000年01月01日"
-        until = norm_date(args.until) if args.until else "9999年12月31日"
+        since = parse_arg_date(args.since) if args.since else (0, 1, 1)
+        until = parse_arg_date(args.until) if args.until else (9999, 12, 31)
         count = 0
-        # 范围查询按正序输出
-        for e in sorted(entries, key=entry_date):
-            d = e[0].strip()
+        # 范围查询按正序输出；无日期行的散落内容不参与
+        for e in sorted(entries, key=entry_key):
+            d = entry_key(e)
+            if d == (0, 0, 0):
+                continue
             if since <= d <= until:
                 print("\n".join(e))
                 print()

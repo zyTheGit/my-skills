@@ -13,6 +13,7 @@ from common import (
     format_report,
     load_config,
     resolve_config_dir,
+    resolve_report_file,
 )
 from get_commits import get_commits
 from write_report import write_report
@@ -54,8 +55,14 @@ def get_all_commits(
             results = list(pool.map(fetch, repo_configs))
 
     all_commits = []
+    seen_hashes: set[str] = set()
     for result in results:
-        all_commits.extend(result)
+        for commit in result:
+            # 主仓库与其 worktree 同时配置时会采到同一提交，按 hash 去重
+            if commit["hash"] in seen_hashes:
+                continue
+            seen_hashes.add(commit["hash"])
+            all_commits.append(commit)
     return all_commits
 
 
@@ -74,11 +81,12 @@ def check_holiday(date: str, api_url: str = "", cache_dir: Path | None = None) -
 
 
 def check_date_exists(date: str, output_path: str) -> bool:
-    """检查指定日期的日报是否已存在"""
+    """检查指定日期的日报是否已存在（往年自动查对应归档文件）"""
     from write_report import check_date_exists as _check
     dt = datetime.strptime(date, "%Y-%m-%d")
     date_str = f"{dt.year}年{dt.month:02d}月{dt.day:02d}日"
-    return _check(date_str, output_path)
+    target = resolve_report_file(Path(output_path), (dt.year, dt.month, dt.day))
+    return _check(date_str, str(target))
 
 
 def _read_summary_file(path: str) -> str:
@@ -135,7 +143,7 @@ def main():
         content = (
             _read_summary_file(args.summary_file) if args.summary_file else args.summary
         )
-        write_report(content, config["output_file"], mode="append")
+        write_report(content, config["output_file"], mode="append", force=args.force)
         return
 
     if not config.get("repos"):
@@ -204,8 +212,8 @@ def main():
     print(report)
     print()
 
-    # 写入文件
-    write_report(report, config["output_file"], mode="append")
+    # 写入文件（--force 时替换同日旧块）
+    write_report(report, config["output_file"], mode="append", force=args.force)
 
 
 if __name__ == "__main__":
