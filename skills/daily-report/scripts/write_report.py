@@ -68,6 +68,35 @@ def _remove_date_block(output_file: Path, date: tuple[int, int, int]) -> tuple[s
     return "\n\n".join(text for text in kept if text.strip()), removed
 
 
+def _insert_block_by_date(
+    content: str, block_content: str, date: tuple[int, int, int]
+) -> str:
+    """按日期顺序插入日报块：放在第一个日期更晚的块之前，否则追加到末尾
+
+    仅用于 --force 覆盖场景：直接追加到文件末尾会把补写的旧日期排到
+    新日期之后，破坏日报的时间顺序。
+    """
+    rendered: list[str] = []
+    inserted = False
+    for _, block in parse_blocks(content):
+        block_text = "\n".join(block).rstrip()
+        if not block_text.strip():
+            continue
+        block_date = None
+        for line in block:
+            m = match_date_line(line)
+            if m is not None:
+                block_date = m
+                break
+        if not inserted and block_date is not None and block_date > date:
+            rendered.append(block_content.rstrip())
+            inserted = True
+        rendered.append(block_text)
+    if not inserted:
+        rendered.append(block_content.rstrip())
+    return "\n\n".join(rendered)
+
+
 def normalize_newlines(content: str) -> str:
     """
     统一换行符处理，兼容不同 agent 传入方式
@@ -158,7 +187,9 @@ def write_report(
         target = resolve_report_file(output_file, content_date) if content_date else output_file
 
         # 去重检查：目标文件已有该日期则跳过（--force 时替换旧块）
-        existing_content = ""
+        # prebuilt：覆盖时已把新内容按日期顺序插好的完整结果，无需再追加
+        existing_content: str = ""
+        prebuilt: str | None = None
         if content_date and _has_date(target, content_date):
             if not force:
                 y, m, d = content_date
@@ -169,12 +200,17 @@ def write_report(
             if removed == 0 and target.exists():
                 # 日期串只是出现在正文里而非日期行，按普通追加处理
                 remaining = read_text_utf8_or_gbk(target)
-            existing_content = remaining
+                existing_content = remaining
+            else:
+                # 按日期顺序插回，避免覆盖后旧日期排到新日期之后
+                prebuilt = _insert_block_by_date(remaining, content, content_date)
             print(f"提示: --force 覆盖 {target.name} 中同日日报")
         elif target.exists():
             existing_content = read_text_utf8_or_gbk(target)
 
-        if existing_content.strip():
+        if prebuilt is not None:
+            new_content = prebuilt
+        elif existing_content.strip():
             new_content = existing_content.rstrip() + "\n\n" + content
         else:
             new_content = content
